@@ -1,0 +1,67 @@
+---
+title: "FRANIG Seed Morphology - Measurement Correlations"
+author: "KyraL"
+date: "2026-01-19"
+output: html_document
+---
+#Introduction
+This code was used to make a correlation between measurements obtained from segmented images vs measurements taken by hand in ImageJ. A subset of 10 x-ray images were hand measured seed length, seed width, wing length, and wing width were compared to automatic measurements.
+
+#Read in data and merge dataframes
+```{r}
+setwd("~/GitHub/Ash/FRANIG_Seed")
+
+library(readxl)
+
+#read in manual measurement data
+ManualData_Merged <- read_excel("ManualData_Merged.xlsx")
+View(ManualData_Merged)
+str(ManualData_Merged)
+
+#pivot the data so there is one row for individual measured
+ManualData_wide <- ManualData_Merged %>%
+     pivot_wider(
+         id_cols = c(Maternal_ID, Seed_order),
+         names_from = Type,
+         values_from = Measeurement
+     )
+View(ManualData_wide)
+
+#save data
+write.csv(ManualData_Merged_WideFormat.csv)
+
+#read in measurements from segmented images
+AllSeedData_Merged_Clean <- read_csv("AllSeedData_Merged_Clean.csv")
+ManualData_wide$Family <- substr(ManualData_wide$Maternal_ID, 1,15)
+ManualData_wide$Individual_ID <- paste(ManualData_wide$Family, ManualData_wide$Seed_order, sep = "-")
+
+#subset to only the individuals used in manual measurements
+df <- left_join(ManualData_wide, AllSeedData_Merged_Clean, by = "Individual_ID")
+
+#save data
+write.csv(df, file = "ManualData_Merged_WideFormat.csv")
+```
+
+#Plot and calculate correlation coefficients
+```{r}
+library(ggplot2)
+ManualData_Merged_WideFormat <- read_csv("ManualData_Merged_WideFormat.csv")
+A <- ggplot(ManualData_Merged_WideFormat, aes(x = Wing_Length, y =Segmented_WL)) +
+  geom_point( fill = "grey", size=3,alpha = 0.5, color = "black", shape = 21)+theme_bw() +
+    labs(y = "Automatic Wing Length (mm)", x = "Manual Wing Length (mm)") + geom_abline(slope = 1, intercept = 0)
+B <- ggplot(ManualData_Merged_WideFormat, aes(x = Wing_Width, y =Segmented_WW)) +
+  geom_point( fill = "grey", size=3,alpha = 0.5, color = "black", shape = 21)+theme_bw() +
+    labs(y = "Automatic Wing Width (mm)", x = "Manual Wing Width (mm)") + geom_abline(slope = 1, intercept = 0)
+C <- ggplot(ManualData_Merged_WideFormat, aes(x = Seed_Length, y =Segmented_SL)) +
+  geom_point( fill = "grey", size=3,alpha = 0.5, color = "black", shape = 21)+theme_bw() +
+    labs(y = "Automatic Seed Length (mm)", x = "Manual Seed Length (mm)") + geom_abline(slope = 1, intercept = 0)
+D <- ggplot(ManualData_Merged_WideFormat, aes(x = Seed_Width, y =Segmeted_SW)) +
+  geom_point( fill = "grey", size=3,alpha = 0.5, color = "black", shape = 21)+theme_bw() +
+    labs(y = "Automatic Seed Width (mm)", x = "Manual Seed Width (mm)") + geom_abline(slope = 1, intercept = 0)
+
+cor(ManualData_Merged_WideFormat$Wing_Length, ManualData_Merged_WideFormat$Segmented_WL, method = "pearson")
+cor(ManualData_Merged_WideFormat$Wing_Width, ManualData_Merged_WideFormat$Segmented_WW, method = "pearson")
+cor(ManualData_Merged_WideFormat$Seed_Length, ManualData_Merged_WideFormat$Segmented_SL, method = "pearson")
+cor(ManualData_Merged_WideFormat$Seed_Width, ManualData_Merged_WideFormat$Segmeted_SW, method = "pearson")
+plot_grid(A,B,C,D, labels = c("A","B","C","D"), ncol = 2, nrow = 2)
+```

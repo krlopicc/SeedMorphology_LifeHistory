@@ -1,0 +1,355 @@
+---
+title: "Seed Morphology RDA"
+author: "KyraL"
+date: "2025-02-17"
+output: html_document
+---
+
+#Introduction
+Code was used to perform pRDA using population mean traits as the response matrix, climate variables as the explanetory matrix, and geography as the conditioning matrix. 
+
+#pRDA for seed traits
+```{r}
+#calculate centroids and read in climate data
+df <- read_csv("~/GitHub/Ash/FRANIG_Seed/FRANIG_CG_SeedMoprh_MasterLocations_Normal_1961_1990Y.csv")
+
+mean_lat <- aggregate(Latitude ~ id2, data = df, FUN = mean)
+mean_lon <- aggregate(Longitude ~ id2, data = df, FUN = mean)
+mean_elev <- aggregate(Elevation ~ id2, data = df, FUN = mean)
+
+pop_cent <- left_join(mean_lat, mean_lon, by = "id2")
+pop_cent <- left_join(pop_cent, mean_elev, by = "id2")
+
+write.csv(pop_cent, file = "FRANIGSeedMorph_PopulationCentroide_NoYearStrat.csv")
+
+FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y <- read_csv("~/GitHub/Ash/FRANIG_Seed/FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y.csv")
+
+colnames(FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y)[colnames(FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y) == "id2"] <- "Prov"
+
+
+#aggregate provenance means for each trait
+
+df_seedmorph <- read_csv("~/GitHub/Ash/FRANIG_Seed/df.seedmorph.csv")
+df_seedmorph$`100_Seed_Weight_mg` <- as.numeric(df_seedmorph$`100_Seed_Weight_mg`)
+colnames(df_seedmorph)[colnames(df_seedmorph) == "Provenance...11"] <- "Prov"
+
+mean_SamA <- aggregate(Samara_Area_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SamW <- aggregate(Samara_Width_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SamL <- aggregate(Samara_Length_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SeeA <- aggregate(Seed_Area_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SeeW <- aggregate(Seed_Width_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SeeL <- aggregate(Seed_Length_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SeeSamA <- aggregate(Seed_Samara_AreaRatio ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SamWL <- aggregate(Samara_WidthLengthRatio ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SW <- aggregate(`100_Seed_Weight_mg` ~ Prov, data = df_seedmorph, FUN = mean)
+df_list <- list(mean_SamA, mean_SamL, mean_SamW, mean_SeeA, mean_SeeL, mean_SeeW, mean_SeeSamA, mean_SamWL, mean_SW)
+morphological_trait_populationmeans <- reduce(df_list, full_join, by = "Prov")
+
+#merge trait data with climate data
+climate_morphology_merged <- left_join(morphological_trait_populationmeans, FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y, by = "Prov")
+climate_morphology_merged <- climate_morphology_merged[!is.na(climate_morphology_merged$Latitude),]
+
+#subset each matrix
+traits <- climate_morphology_merged[,2:10]
+climate <- climate_morphology_merged[,c("DD5","MAT","MAP","TD","MSP","RH","CMD")]
+geo <- climate_morphology_merged[,12:14]
+str(traits)
+str(climate)
+climate.z<-scale(climate) #scaled climate data
+head(climate.z)
+str(climate.z)
+traits.z<-scale(traits) #scaled trait data
+str(traits.z)
+head(traits.z)
+Prov <- climate_morphology_merged[,1]
+env.ra <- as.matrix(climate.z)
+geo <- as.matrix(geo)
+
+#do RDA
+library(vegan)
+trait.rda <- rda(traits~ env.ra + Condition(geo), scale = T)
+plot(trait.rda)
+
+#Plot RDA
+sites.sc <- scores(trait.rda, choices=1:2, scaling=2, display="lc") %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Site")
+
+species.sc <- scores(trait.rda, choices=1:2, scaling=2, display="sp") %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Species")
+
+env.sc <- scores(trait.rda, choices=1:2, scaling=2, display="bp") %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Variable")
+
+region.sc <- scores(trait.rda, choices=1:2, scaling=2, display="cn") %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Region")
+
+species.sc$Species <- c("WA","WW","WL","SA","SW","SL","SA/WA","WW/WL", "SM")
+env.sc$Variable <- c("DD5","MAT","MAP","TD","MSP","RH","CMD")
+sites.sc$Site <- climate_morphology_merged[,1]
+
+
+ggplot() +
+        
+         # Plot Sites (black circles)
+         geom_point(data = sites.sc, aes(x = RDA1, y = RDA2),shape = 21, color = "black", fill = "darkgrey",alpha = 0.5,size = 5) + 
+         
+         # Plot Species Scores (text)
+         geom_text(data = species.sc, aes(x = RDA1, y = RDA2, label = Species), color = "blue", size = 5) +
+         
+         # Plot Environmental Arrows
+         geom_segment(data = env.sc, aes(x = 0, y = 0, xend = RDA1, yend = RDA2), 
+                                         arrow = arrow(length = unit(0.1, "inches")), color = "black") + 
+         
+         # Environmental Variable Labels (light grey)
+         geom_text(data = env.sc, aes(x = RDA1, y = RDA2, label = Variable), color = "black", size = 4, fontface = "bold", hjust = 1.2) + xlab("RDA1 - 59.54%") + ylab("RDA2 - 31.47%") + theme_minimal() +   theme(panel.border = element_rect(color = "black", fill = NA, size = 1)) + geom_vline(xintercept = 0, col = "black") + geom_hline(yintercept = 0, col = "black")
+
+
+eigenvalues <- trait.rda$CCA$eig
+# Total inertia (variance explained by all axes)
+constrained_inertia <- sum(eigenvalues)  # Total climate-explained variance
+
+# Proportion of variance explained by each axis
+prop_climate_variance_explained <- eigenvalues / constrained_inertia * 100
+
+# Display the result
+prop_climate_variance_explained
+
+
+#find the overlap
+# Full model: both climate and geography
+rda.full <- rda(traits ~ env.ra + geo, scale = TRUE)
+
+# Climate only (partial): removing geography
+rda.clim <- rda(traits ~ env.ra + Condition(geo), scale = TRUE)
+
+# Geography only (partial): removing climate
+rda.geo <- rda(traits ~ geo + Condition(env.ra), scale = TRUE)
+
+# Extract adjusted R² for unbiased partitioning
+Rsq.full <- RsquareAdj(rda.full)$adj.r.squared
+Rsq.clim <- RsquareAdj(rda.clim)$adj.r.squared
+Rsq.geo  <- RsquareAdj(rda.geo)$adj.r.squared
+
+# Interaction (shared variation)
+interaction <- Rsq.full - Rsq.clim - Rsq.geo
+
+c(Rsq.full = Rsq.full,
+  PureClimate = Rsq.clim,
+  PureGeo = Rsq.geo,
+  Shared = interaction)
+```
+
+#pRDA for greenhouse traits
+```{r}
+FRANIG_HC_MORPH_COMPLETE <- read_csv("~/GitHub/Ash/FRANIG_Seed/FRANIG_HC_MORPH_COMPLETE.csv")
+greenhouse_traits <- FRANIG_HC_MORPH_COMPLETE[,c(3,7,9:12,20)]
+colnames(greenhouse_traits)[colnames(greenhouse_traits) == "id2"] <- "Prov"
+
+#calculate population means
+mean_propemerged <- aggregate(Proportion_Emerged ~ Prov, data = greenhouse_traits, FUN = mean)
+mean_height <- aggregate(Height_cm ~ Prov, data = greenhouse_traits, FUN = mean)
+mean_emergencetime <- aggregate(Time_to_Emergence ~ Prov, data = greenhouse_traits, FUN = mean)
+mean_trueleaftime<- aggregate(Time_to_TrueLeaves ~ Prov, data = greenhouse_traits, FUN = mean)
+mean_compoundleaftime <- aggregate(Time_to_CompoundLeaves ~ Prov, data = greenhouse_traits, FUN = mean)
+df_list <- list(mean_propemerged, mean_height, mean_emergencetime, mean_trueleaftime, mean_compoundleaftime)
+greenhouse_trait_populationmeans <- reduce(df_list, full_join, by = "Prov")
+
+climate_morphology_merged <- left_join(greenhouse_trait_populationmeans, FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y, by = "Prov")
+
+climate_morphology_merged <- climate_morphology_merged[!is.na(climate_morphology_merged$Latitude),]
+
+#remove cps because it has no compound leaf data
+climate_morphology_merged <- climate_morphology_merged[!is.na(climate_morphology_merged$Time_to_CompoundLeaves),]
+
+
+#subset the trait, climate, and geo data from the dataframe
+traits <- climate_morphology_merged[,2:6]
+climate <- climate_morphology_merged[,c("DD5","MAT","MAP","TD","MSP","RH","CMD")]
+geo <- climate_morphology_merged[,8:10]
+str(traits)
+str(climate)
+climate.z<-scale(climate) #scaled climate data
+head(climate.z)
+str(climate.z)
+traits.z<-scale(traits) #scaled trait data
+str(traits.z)
+head(traits.z)
+Prov <- climate_morphology_merged[,1]
+env.ra <- as.matrix(climate.z)
+geo <- as.matrix(geo)
+
+#do RDA
+library(vegan)
+trait.rda <- rda(traits~ env.ra + Condition(geo), scale = T)
+plot(trait.rda)
+
+#Plot RDA
+sites.sc <- scores(trait.rda, choices=1:2, scaling=2, display="lc") %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Site")
+
+species.sc <- scores(trait.rda, choices=1:2, scaling=2, display="sp") %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Species")
+
+env.sc <- scores(trait.rda, choices=1:2, scaling=2, display="bp") %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Variable")
+
+region.sc <- scores(trait.rda, choices=1:2, scaling=2, display="cn") %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Region")
+
+species.sc$Species <- c("Proportion Emerged","Height" ,"Time to Emerge", "Time to True Leaves", "Time to Compound Leaves")
+env.sc$Variable <- c("DD5","MAT","MAP","TD","MSP","RH","CMD")
+sites.sc$Site <- climate_morphology_merged[,1]
+
+
+ggplot() +
+        
+         # Plot Sites (black circles)
+         geom_point(data = sites.sc, aes(x = RDA1, y = RDA2),shape = 21, color = "black", fill = "darkgrey",alpha = 0.5,size = 5) + 
+         
+         # Plot Species Scores (text)
+         geom_text(data = species.sc, aes(x = RDA1, y = RDA2, label = Species), color = "blue", size = 5) +
+         
+         # Plot Environmental Arrows
+         geom_segment(data = env.sc, aes(x = 0, y = 0, xend = RDA1, yend = RDA2), 
+                                         arrow = arrow(length = unit(0.1, "inches")), color = "black") + 
+         
+         # Environmental Variable Labels (light grey)
+         geom_text(data = env.sc, aes(x = RDA1, y = RDA2, label = Variable), color = "black", size = 4, fontface = "bold", hjust = 1.2) + xlab("RDA1 - 58.35%") + ylab("RDA2 - 25.91%") + theme_minimal() +   theme(panel.border = element_rect(color = "black", fill = NA, size = 1)) + geom_vline(xintercept = 0, col = "black") + geom_hline(yintercept = 0, col = "black")
+
+
+eigenvalues <- trait.rda$CCA$eig
+# Total inertia (variance explained by all axes)
+constrained_inertia <- sum(eigenvalues)  # Total climate-explained variance
+
+# Proportion of variance explained by each axis
+prop_climate_variance_explained <- eigenvalues / constrained_inertia * 100
+
+# Display the result
+prop_climate_variance_explained
+
+
+#find the overlap
+# Full model: both climate and geography
+rda.full <- rda(traits ~ env.ra + geo, scale = TRUE)
+
+# Climate only (partial): removing geography
+rda.clim <- rda(traits ~ env.ra + Condition(geo), scale = TRUE)
+
+# Geography only (partial): removing climate
+rda.geo <- rda(traits ~ geo + Condition(env.ra), scale = TRUE)
+
+# Extract adjusted R² for unbiased partitioning
+Rsq.full <- RsquareAdj(rda.full)$adj.r.squared
+Rsq.clim <- RsquareAdj(rda.clim)$adj.r.squared
+Rsq.geo  <- RsquareAdj(rda.geo)$adj.r.squared
+
+# Interaction (shared variation)
+interaction <- Rsq.full - Rsq.clim - Rsq.geo
+
+c(Rsq.full = Rsq.full,
+  PureClimate = Rsq.clim,
+  PureGeo = Rsq.geo,
+  Shared = interaction)
+```
+
+#pRDA all traits combined
+```{r}
+traits <- climate_morphology_merged[,c(7:11,13:18,49:50)]
+climate <- climate_morphology_merged[,c("DD5.x","MAT.x","MAP.x","TD.x","MSP.x","RH.x","CMD.x")]
+geo <- climate_morphology_merged[,21:23]
+str(traits)
+str(climate)
+climate.z<-scale(climate) #scaled climate data
+head(climate.z)
+str(climate.z)
+traits.z<-scale(traits) #scaled trait data
+str(traits.z)
+head(traits.z)
+Family <- climate_morphology_merged[,3]
+env.ra <- as.matrix(climate.z)
+geo <- as.matrix(geo)
+#do the RDA
+library(vegan)
+trait.rda <- rda(traits~ env.ra + Condition(geo), scale = T)
+plot(trait.rda)
+
+#Plot RDA
+sites.sc <- scores(trait.rda, choices=1:2, scaling=2, display="lc") %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Site")
+
+species.sc <- scores(trait.rda, choices=1:2, scaling=2, display="sp") %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Species")
+
+env.sc <- scores(trait.rda, choices=1:2, scaling=2, display="bp") %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Variable")
+
+region.sc <- scores(trait.rda, choices=1:2, scaling=2, display="cn") %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "Region")
+
+species.sc$Species <- c("Proportion_Emerged","Seed_Weight","Height","Time_to_Emergence","Time_to_TrueLeaves","WA","WL","WW","SA","SL","SW","SA/WA","WW/WL")
+env.sc$Variable <- c("DD5","MAT","MAP","TD","MSP","RH","CMD")
+sites.sc$Site <- climate_morphology_merged[,1]
+
+
+ggplot() +
+        
+         # Plot Sites (black circles)
+         geom_point(data = sites.sc, aes(x = RDA1, y = RDA2),shape = 21, color = "black", fill = "darkgrey",alpha = 0.5,size = 5) + 
+         
+         # Plot Species Scores (text)
+         geom_text(data = species.sc, aes(x = RDA1, y = RDA2, label = Species), color = "blue", size = 5) +
+         
+         # Plot Environmental Arrows
+         geom_segment(data = env.sc, aes(x = 0, y = 0, xend = RDA1, yend = RDA2), 
+                                         arrow = arrow(length = unit(0.1, "inches")), color = "black") + 
+         
+         # Environmental Variable Labels (light grey)
+         geom_text(data = env.sc, aes(x = RDA1, y = RDA2, label = Variable), color = "black", size = 4, fontface = "bold", hjust = 1.2) + xlim(-0.75,1.2) + xlab("RDA1 - 51.31%") + ylab("RDA2 - 24.72%") + theme_minimal() +   theme(panel.border = element_rect(color = "black", fill = NA, size = 1)) + geom_vline(xintercept = 0, col = "black") + geom_hline(yintercept = 0, col = "black")
+
+
+eigenvalues <- trait.rda$CCA$eig
+# Total inertia (variance explained by all axes)
+constrained_inertia <- sum(eigenvalues)  # Total climate-explained variance
+
+# Proportion of variance explained by each axis
+prop_climate_variance_explained <- eigenvalues / constrained_inertia * 100
+
+# Display the result
+prop_climate_variance_explained
+
+
+#find the overlap
+# Full model: both climate and geography
+rda.full <- rda(traits ~ env.ra + geo, scale = TRUE)
+
+# Climate only (partial): removing geography
+rda.clim <- rda(traits ~ env.ra + Condition(geo), scale = TRUE)
+
+# Geography only (partial): removing climate
+rda.geo <- rda(traits ~ geo + Condition(env.ra), scale = TRUE)
+
+# Extract adjusted R² for unbiased partitioning
+Rsq.full <- RsquareAdj(rda.full)$adj.r.squared
+Rsq.clim <- RsquareAdj(rda.clim)$adj.r.squared
+Rsq.geo  <- RsquareAdj(rda.geo)$adj.r.squared
+
+# Interaction (shared variation)
+interaction <- Rsq.full - Rsq.clim - Rsq.geo
+
+c(Rsq.full = Rsq.full,
+  PureClimate = Rsq.clim,
+  PureGeo = Rsq.geo,
+  Shared = interaction)
+```

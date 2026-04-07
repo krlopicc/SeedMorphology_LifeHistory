@@ -1,0 +1,526 @@
+---
+title: "FRANIG Seed Morphology - Variance Partitioning"
+author: "KyraL"
+date: "2025-02-04"
+output: html_document
+---
+#Introduction
+This section of code is used to calculate the proportion of variance in seed traits explained by population, family, and residual (within tree) variance. Code was adapted from Di Santo at al 2021.
+
+#Read in data
+```{r}
+setwd("~/GitHub/Ash/FRANIG_Seed")
+library(tidyverse)
+
+#data is pulled From J.Mazza's outlier cleaning on Feb 4th, 2025. He removed individuals that had extremely high area values for seed or wing
+AllData_SamaraAreaErrorsRemoved <- read_csv("AllData_SamaraAreaErrorsRemoved(in).csv")
+FRANIG_SeedAreaOutliers <- read_csv("FRANIG_SeedAreaOutliers(in).csv")
+#subset outlier individuals
+false_outliers_SeeA<- subset(FRANIG_SeedAreaOutliers, `Problem_Child?`=="Y")
+false_outlier_list_SeeA <- as.list(false_outliers_SeeA$Individual_ID)
+#remove outlires from full data set
+cleaned_SeeA_outliers_merged_data <- AllData_SamaraAreaErrorsRemoved[!AllData_SamaraAreaErrorsRemoved$Individual_ID %in% false_outlier_list_SeeA,]
+write.csv(cleaned_SeeA_outliers_merged_data,file="AllData_SamaraAndSeedAreaErrorsRemoved.csv")
+```
+
+```{r}
+library(readxl)
+#read in cleaned data
+cleaned_SeeA_outliers_merged_data <- read_csv("~/GitHub/Ash/FRANIG_Seed/AllData_SamaraAndSeedAreaErrorsRemoved.csv")
+
+#read in file with 100 seed weight
+FRANIGSeed_FullInventory_WithSeedWeight <- read_excel("FRANIGSeed_FullInventory_WithSeedWeight.xlsx")
+year_family <- FRANIGSeed_FullInventory_WithSeedWeight[,c(1,4:5)]
+colnames(year_family)[colnames(year_family) == "Individual"] <- "Family"
+
+#subset only the colums with data
+df.seedmorph <- cleaned_SeeA_outliers_merged_data[,4:19]
+
+#remove extra spaces and characters from the Family IDs to make merging smooth
+df.seedmorph$Family <- sub("\\(2)$","",df.seedmorph$Family)
+df.seedmorph$Family <- trimws(df.seedmorph$Family)
+df.seedmorph$Family <- gsub("2AB", "2A/2B", df.seedmorph$Family)
+year_family$Family <- trimws(year_family$Family)
+
+#Join seed trait data with seed weight data
+df.seedmorph <- left_join(df.seedmorph, year_family, by = "Family") 
+df.seedmorph$Family <- as.factor(df.seedmorph$Family)
+colnames(df.seedmorph)[colnames(df.seedmorph) == "id2"] <- "Provenance"
+df.seedmorph$Provenance <- as.factor(df.seedmorph$Provenance)
+df.seedmorph$Year_Collected <- as.factor(df.seedmorph$Year_Collected)
+
+#calculate derived traits
+df.seedmorph$Seed_Samara_AreaRatio <- (df.seedmorph$Seed_Area_Combined/df.seedmorph$Samara_Area_Combined)
+df.seedmorph$Samara_WidthLengthRatio <- (df.seedmorph$Samara_Width_Combined/df.seedmorph$Samara_Length_Combined)
+
+write.csv(df.seedmorph, file = "df.seedmorph.csv")
+
+#are seed morphology traits normally distributed?
+#Wing Area
+hist(df.seedmorph$Samara_Area_Combined)
+qqnorm(df.seedmorph$Samara_Area_Combined)
+qqline(df.seedmorph$Samara_Area_Combined)
+#Wing Width
+hist(df.seedmorph$Samara_Width_Combined)
+qqnorm(df.seedmorph$Samara_Width_Combined)
+qqline(df.seedmorph$Samara_Width_Combined)
+#Wing Length
+hist(df.seedmorph$Samara_Length_Combined)
+qqnorm(df.seedmorph$Samara_Length_Combined)
+qqline(df.seedmorph$Samara_Length_Combined)
+#Seed Area
+hist(df.seedmorph$Seed_Area_Combined)
+qqnorm(df.seedmorph$Seed_Area_Combined)
+qqline(df.seedmorph$Seed_Area_Combined)
+#Seed Width
+hist(df.seedmorph$Seed_Width_Combined)
+qqnorm(df.seedmorph$Seed_Width_Combined)
+qqline(df.seedmorph$Seed_Width_Combined)
+#Seed Length
+hist(df.seedmorph$Seed_Length_Combined)
+qqnorm(df.seedmorph$Seed_Length_Combined)
+qqline(df.seedmorph$Seed_Length_Combined)
+#Seed to Wing Area Ratio
+hist(df.seedmorph$Seed_Samara_AreaRatio)
+qqnorm(df.seedmorph$Seed_Samara_AreaRatio)
+qqline(df.seedmorph$Seed_Samara_AreaRatio)
+#Wing Width to Length Ratio
+hist(df.seedmorph$Samara_WidthLengthRatio)
+qqnorm(df.seedmorph$Samara_WidthLengthRatio)
+qqline(df.seedmorph$Samara_WidthLengthRatio)
+
+#remove QC-RVC-5 for now, seed length = seed width
+df.seedmorph <- df.seedmorph[!df.seedmorph$Family == "FRANIG-QC-RVC-5",]
+write.csv(df.seedmorph, file = "FRANIG_SeedMorphology_AllTraits.csv")
+```
+
+#Is data normally distributed
+```{r}
+hist_qq_2x2 <- function(x1, name1, x2, name2,
+                        xlab1 = name1, xlab2 = name2) {
+
+  par(mfrow = c(2, 2), mar = c(4, 4, 3, 1))
+
+  ## Trait 1 – Histogram
+  hist(
+    x1,
+    main = paste(name1, "– Histogram"),
+    xlab = xlab1,
+    col = "grey85",
+    border = "black"
+  )
+
+  ## Trait 1 – QQ plot
+  qqnorm(
+    x1,
+    main = paste(name1, "– Normal Q–Q Plot"),
+    pch = 16,
+    cex = 0.7
+  )
+  qqline(x1, col = "red", lwd = 2)
+
+  ## Trait 2 – Histogram
+  hist(
+    x2,
+    main = paste(name2, "– Histogram"),
+    xlab = xlab2,
+    col = "grey85",
+    border = "black"
+  )
+
+  ## Trait 2 – QQ plot
+  qqnorm(
+    x2,
+    main = paste(name2, "– Normal Q–Q Plot"),
+    pch = 16,
+    cex = 0.7
+  )
+  qqline(x2, col = "red", lwd = 2)
+}
+
+
+hist_qq_2x2(
+  df.seedmorph$Samara_Area_Combined,  "Wing Area",
+  df.seedmorph$Samara_Width_Combined, "Wing Width"
+)
+
+hist_qq_2x2(
+  df.seedmorph$Samara_Length_Combined, "Wing Length",
+  df.seedmorph$Samara_WidthLengthRatio, "Wing Width : Wing Ratio",
+  xlab2 = "Width / Length"
+)
+
+hist_qq_2x2(
+  df.seedmorph$Seed_Area_Combined,  "Seed Area",
+  df.seedmorph$Seed_Width_Combined, "Seed Width"
+)
+
+hist_qq_2x2(
+  df.seedmorph$Seed_Length_Combined, "Seed Length",
+  df.seedmorph$Seed_Samara_AreaRatio, "Seed : Wing Area Ratio",
+  xlab2 = "Seed / Wing Area"
+)
+
+
+pdf("SeedMorph_Normality_2x2.pdf", width = 8, height = 8)
+
+hist_qq_2x2(
+  df.seedmorph$Samara_Area_Combined,  "Wing Area",
+  df.seedmorph$Samara_Width_Combined, "Wing Width"
+)
+
+hist_qq_2x2(
+  df.seedmorph$Samara_Length_Combined, "Wing Length",
+  df.seedmorph$Samara_WidthLengthRatio, "Wing Width : Length Ratio",
+  xlab2 = "Width / Length"
+)
+
+hist_qq_2x2(
+  df.seedmorph$Seed_Area_Combined,  "Seed Area",
+  df.seedmorph$Seed_Width_Combined, "Seed Width"
+)
+
+hist_qq_2x2(
+  df.seedmorph$Seed_Length_Combined, "Seed Length",
+  df.seedmorph$Seed_Samara_AreaRatio, "Seed : Wing Area Ratio",
+  xlab2 = "Seed / Wing Area"
+)
+
+dev.off()
+
+```
+
+#Variance partitioning
+```{r}
+#code adapted from Volk et al 2022 & DiSanto et al 2021
+#does year have a significant effect explaining samara area?
+library(sjPlot)
+library(lme4)
+library(performance)
+library(see)
+library(lmerTest)
+library(MuMIn)
+
+res <- mlme4res <- matrix(nrow = 8, ncol = 4)
+#make matrix with r squared values for each seed measurement (i.e. 4 rows (traits) and 3 columns (r-squared values))
+rownames(res) <- colnames(df.seedmorph[c(3:8,19:20)])
+colnames(res) <- c("R2_Pop", "R2_MatFam", "R2_Tot", "R2_Err")
+
+pval <- matrix(nrow = 8, ncol = 2)
+rownames(pval) <- colnames(df.seedmorph[c(2:7,19:20)])
+colnames(pval) <- c("Pop", "MatFam")
+
+#Wing Area
+SamA1 <- lm(Samara_Area_Combined ~ Provenance, data = df.seedmorph)
+SamA2 <- lmer(Samara_Area_Combined ~ Provenance + (1|Provenance:Family), data = df.seedmorph)
+SamA3 <- lmer(Samara_Area_Combined ~ Provenance + (1|Provenance:Family) + (1|Provenance:Year_Collected), data = df.seedmorph)
+#adding year to the model causes it not to converge because the variance is zero or very close to zero, so we will not include year
+ranova(SamA2) #family is indeed significant shocker
+SamA_check <- check_model(SamA2)
+
+SamA_var <- r.squaredGLMM(SamA2)
+res[1,1] <- SamA_var[,1]
+res[1,2] <- (SamA_var[,2] - SamA_var[,1])
+res[1,3] <- SamA_var[,2]
+res[1,4] <- 1 - SamA_var[,2]
+
+pval[1,1] <- anova(SamA2)$`Pr(>F)`
+pval[1,2] <- ranova(SamA2)$`Pr(>Chisq)`[2]
+
+#Wing Width
+SamW1 <- lm(Samara_Width_Combined ~ Provenance, data = df.seedmorph)
+SamW2 <- lmer(Samara_Width_Combined ~ Provenance + (1|Provenance:Family), data = df.seedmorph)
+SamW3 <- lmer(Samara_Width_Combined ~ Provenance + (1|Provenance:Family) + (1|Year_Collected), data = df.seedmorph)
+ranova(SamW2)
+SamW_check <- check_model(SamW2)
+
+SamW_var <- r.squaredGLMM(SamW2)
+res[2,1] <- SamW_var[,1]
+res[2,2] <- (SamW_var[,2] - SamW_var[,1])
+res[2,3] <- SamW_var[,2]
+res[2,4] <- 1 - SamW_var[,2]
+
+pval[2,1] <- anova(SamW2)$`Pr(>F)`
+pval[2,2] <- ranova(SamW2)$`Pr(>Chisq)`[2]
+
+#Wing Length
+SamL1 <- lm(Samara_Length_Combined ~ Provenance, data = df.seedmorph)
+SamL2 <- lmer(Samara_Length_Combined ~ Provenance + (1|Provenance:Family), data = df.seedmorph)
+SamL3 <- lmer(Samara_Length_Combined ~ Provenance + (1|Provenance:Family) + (1|Year_Collected), data = df.seedmorph)
+anova(SamL2, SamL3) #year is not significant
+ranova(SamL2)
+SamL_check <- check_model(SamL2)
+
+SamL_var <- r.squaredGLMM(SamL2)
+res[3,1] <- SamL_var[,1]
+res[3,2] <- (SamL_var[,2] - SamL_var[,1])
+res[3,3] <- SamL_var[,2]
+res[3,4] <- 1 - SamL_var[,2]
+
+pval[3,1] <- anova(SamL2)$`Pr(>F)`
+pval[3,2] <- ranova(SamL2)$`Pr(>Chisq)`[2]
+
+#Seed Area
+SeeA1 <- lm(Seed_Area_Combined ~ Provenance, data = df.seedmorph)
+SeeA2 <- lmer(Seed_Area_Combined ~ Provenance + (1|Provenance:Family), data = df.seedmorph)
+SeeA3 <- lmer(Seed_Area_Combined ~ Provenance + (1|Provenance:Family) + (1|Year_Collected), data = df.seedmorph)
+anova(SeeA2, SeeA3) #year is not significant
+ranova(SeeA2)
+SeeA_check <- check_model(SeeA2)
+
+SeeA_var <- r.squaredGLMM(SeeA2)
+res[4,1] <- SeeA_var[,1]
+res[4,2] <- (SeeA_var[,2] - SeeA_var[,1])
+res[4,3] <- SeeA_var[,2]
+res[4,4] <- 1 - SeeA_var[,2]
+
+pval[4,1] <- anova(SeeA2)$`Pr(>F)`
+pval[4,2] <- ranova(SeeA2)$`Pr(>Chisq)`[2]
+
+#Seed WIdth
+SeeW1 <- lm(Seed_Width_Combined ~ Provenance, data = df.seedmorph)
+SeeW2 <- lmer(Seed_Width_Combined ~ Provenance + (1|Provenance:Family), data = df.seedmorph)
+SeeW3 <- lmer(Seed_Width_Combined ~ Provenance + (1|Provenance:Family) + (1|Year_Collected), data = df.seedmorph)
+anova(SeeW2, SeeW3) #year is not significant
+ranova(SeeW2)
+SeeW_check <- check_model(SeeW2)
+
+SeeW_var <- r.squaredGLMM(SeeW2)
+res[5,1] <- SeeW_var[,1]
+res[5,2] <- (SeeW_var[,2] - SeeW_var[,1])
+res[5,3] <- SeeW_var[,2]
+res[5,4] <- 1 - SeeW_var[,2]
+
+pval[5,1] <- anova(SeeW2)$`Pr(>F)`
+pval[5,2] <- ranova(SeeW2)$`Pr(>Chisq)`[2]
+
+#Seed Length
+SeeL1 <- lm(Seed_Length_Combined ~ Provenance, data = df.seedmorph)
+SeeL2 <- lmer(Seed_Length_Combined ~ Provenance + (1|Provenance:Family), data = df.seedmorph)
+SeeL3 <- lmer(Seed_Length_Combined ~ Provenance + (1|Provenance:Family) + (1|Year_Collected), data = df.seedmorph)
+anova(SeeL2, SeeL3) #year is not significant
+ranova(SeeL2)
+SeeL_check <- check_model(SeeL2)
+
+SeeL_var <- r.squaredGLMM(SeeL2)
+res[6,1] <- SeeL_var[,1]
+res[6,2] <- (SeeL_var[,2] - SeeL_var[,1])
+res[6,3] <- SeeL_var[,2]
+res[6,4] <- 1 - SeeL_var[,2]
+
+pval[6,1] <- anova(SeeL2)$`Pr(>F)`
+pval[6,2] <- ranova(SeeL2)$`Pr(>Chisq)`[2]
+
+#Seed/Wing Area
+SeeSamA1 <- lm(Seed_Samara_AreaRatio ~ Provenance, data = df.seedmorph)
+SeeSamA2 <- lmer(Seed_Samara_AreaRatio ~ Provenance + (1|Provenance:Family), data = df.seedmorph)
+SeeSamA3 <- lmer(Seed_Samara_AreaRatio ~ Provenance + (1|Provenance:Family) + (1|Year_Collected), data = df.seedmorph)
+anova(SeeSamA2, SeeSamA3)#year is not significant
+ranova(SeeSamA2)
+SeeSamA_check <- check_model(SeeSamA2)
+
+SeeSamA_var <- r.squaredGLMM(SeeSamA2)
+res[7,1] <- SeeSamA_var[,1]
+res[7,2] <- (SeeSamA_var[,2] - SeeSamA_var[,1])
+res[7,3] <- SeeSamA_var[,2]
+res[7,4] <- 1 - SeeSamA_var[,2]
+
+pval[7,1] <- anova(SeeSamA2)$`Pr(>F)`
+pval[7,2] <- ranova(SeeSamA2)$`Pr(>Chisq)`[2]
+
+#Wing Width/Length
+SamWL1 <- lm(Samara_WidthLengthRatio ~ Provenance, data = df.seedmorph)
+SamWL2 <- lmer(Samara_WidthLengthRatio ~ Provenance + (1|Provenance:Family), data = df.seedmorph)
+SamWL3 <- lmer(Samara_WidthLengthRatio ~ Provenance + (1|Provenance:Family) + (1|Year_Collected), data = df.seedmorph)
+anova(SamWL2, SamWL3)#year is not significant
+ranova(SamWL2)
+SamWL_check <- check_model(SamWL2)
+
+SamWL_var <- r.squaredGLMM(SamWL2)
+res[8,1] <- SamWL_var[,1]
+res[8,2] <- (SamWL_var[,2] - SamWL_var[,1])
+res[8,3] <- SamWL_var[,2]
+res[8,4] <- 1 - SamWL_var[,2]
+
+pval[8,1] <- anova(SamWL2)$`Pr(>F)`
+pval[8,2] <- ranova(SamWL2)$`Pr(>Chisq)`[2]
+
+```
+
+#Plotting
+```{r}
+rownames(res) <- c("Wing Area", "Wing Length", "Wing Width", "Seed Area", "Seed Length", "Seed Width", "Seed/Wing Area Ratio", "Wing Width/Length Ratio")
+resplot <- as.data.frame(res)
+View(resplot)
+
+resplot <- as.matrix(resplot)
+resmelt <- reshape2::melt(resplot)
+resmelt <- resmelt[resmelt$Var2 != "R2_Tot",]
+var_plot = ggplot(data=resmelt, aes(x=Var1, y=value, fill=Var2))+geom_bar(stat = "identity", position = position_stack(reverse = T), color="black")+
+theme_classic()+coord_flip()+theme(panel.grid = element_blank(), legend.position = "top", legend.justification = "center", legend.text = element_text(size =12), axis.text.y = element_text(size=14))+
+scale_fill_manual(labels = c("Population", "Maternal Family", "Residuals"),
+values = c("darkgreen", "lightgreen", "grey"),
+name = element_blank()) + ylab("Proportion of Variance Explained") + xlab("Samara Trait")
+var_plot
+```
+
+#Testing if year significant with subset of populations
+```{r}
+df.subset <- subset(df.seedmorph, Provenance == "CCS" | Provenance == "DPR" | Provenance == "EUN" | Provenance == "KAN" | Provenance == "LAM" | Provenance == "OXF" | Provenance == "PRF" | Provenance == "SCF")
+
+
+#code adapted from Volk et al 2022 & DiSanto et al 2021
+#does year have a significant effect explaining samara area?
+library(sjPlot)
+library(lme4)
+library(performance)
+library(see)
+library(lmerTest)
+library(MuMIn)
+
+res <- mlme4res <- matrix(nrow = 8, ncol = 4)
+#make matrix with r squared values for each seed measurement (i.e. 4 rows (traits) and 3 columns (r-squared values))
+rownames(res) <- colnames(df.subset[c(2:7,18:19)])
+colnames(res) <- c("R2_Pop", "R2_MatFam", "R2_Tot", "R2_Err")
+
+pval <- matrix(nrow = 8, ncol = 2)
+rownames(pval) <- colnames(df.subset[c(2:7,18:19)])
+colnames(pval) <- c("Pop", "MatFam")
+
+#Wing Area
+SamA1 <- lm(Samara_Area_Combined ~ Provenance, data = df.subset)
+SamA2 <- lmer(Samara_Area_Combined ~ Provenance + (1|Provenance:Family), data = df.subset)
+SamA3 <- lmer(Samara_Area_Combined ~ Provenance + (1|Provenance:Family) + (1|Provenance:Year_Collected), data = df.subset)
+#adding year to the model causes it not to converge because the variance is zero or very close to zero, so we will not include year
+ranova(SamA2) #family is indeed significant (shocker)
+#SamA_check <- check_model(SamA2)
+
+SamA_var <- r.squaredGLMM(SamA2)
+res[1,1] <- SamA_var[,1]
+res[1,2] <- (SamA_var[,2] - SamA_var[,1])
+res[1,3] <- SamA_var[,2]
+res[1,4] <- 1 - SamA_var[,2]
+
+pval[1,1] <- anova(SamA2)$`Pr(>F)`
+pval[1,2] <- ranova(SamA2)$`Pr(>Chisq)`[2]
+
+#Wing Width
+SamW1 <- lm(Samara_Width_Combined ~ Provenance, data = df.subset)
+SamW2 <- lmer(Samara_Width_Combined ~ Provenance + (1|Provenance:Family), data = df.subset)
+SamW3 <- lmer(Samara_Width_Combined ~ Provenance + (1|Provenance:Family) + (1|Provenance:Year_Collected), data = df.subset)
+anova(SamW2, SamW3)
+ranova(SamW2)
+#SamW_check <- check_model(SamW2)
+
+SamW_var <- r.squaredGLMM(SamW2)
+res[2,1] <- SamW_var[,1]
+res[2,2] <- (SamW_var[,2] - SamW_var[,1])
+res[2,3] <- SamW_var[,2]
+res[2,4] <- 1 - SamW_var[,2]
+
+pval[2,1] <- anova(SamW2)$`Pr(>F)`
+pval[2,2] <- ranova(SamW2)$`Pr(>Chisq)`[2]
+
+#Wing Length
+SamL1 <- lm(Samara_Length_Combined ~ Provenance, data = df.subset)
+SamL2 <- lmer(Samara_Length_Combined ~ Provenance + (1|Provenance:Family), data = df.subset)
+SamL3 <- lmer(Samara_Length_Combined ~ Provenance + (1|Provenance:Family) + (1|Provenance:Year_Collected), data = df.subset)
+anova(SamL2, SamL3) #year is not significant
+ranova(SamL2)
+#SamL_check <- check_model(SamL2)
+
+SamL_var <- r.squaredGLMM(SamL2)
+res[3,1] <- SamL_var[,1]
+res[3,2] <- (SamL_var[,2] - SamL_var[,1])
+res[3,3] <- SamL_var[,2]
+res[3,4] <- 1 - SamL_var[,2]
+
+pval[3,1] <- anova(SamL2)$`Pr(>F)`
+pval[3,2] <- ranova(SamL2)$`Pr(>Chisq)`[2]
+
+#Seed Area
+SeeA1 <- lm(Seed_Area_Combined ~ Provenance, data = df.subset)
+SeeA2 <- lmer(Seed_Area_Combined ~ Provenance + (1|Provenance:Family), data = df.subset)
+SeeA3 <- lmer(Seed_Area_Combined ~ Provenance + (1|Provenance:Family) + (1|Provenance:Year_Collected), data = df.subset)
+anova(SeeA2, SeeA3) #year is not significant
+ranova(SeeA2)
+#SeeA_check <- check_model(SeeA2)
+
+SeeA_var <- r.squaredGLMM(SeeA2)
+res[4,1] <- SeeA_var[,1]
+res[4,2] <- (SeeA_var[,2] - SeeA_var[,1])
+res[4,3] <- SeeA_var[,2]
+res[4,4] <- 1 - SeeA_var[,2]
+
+pval[4,1] <- anova(SeeA2)$`Pr(>F)`
+pval[4,2] <- ranova(SeeA2)$`Pr(>Chisq)`[2]
+
+#Seed WIdth
+SeeW1 <- lm(Seed_Width_Combined ~ Provenance, data = df.subset)
+SeeW2 <- lmer(Seed_Width_Combined ~ Provenance + (1|Provenance:Family), data = df.subset)
+SeeW3 <- lmer(Seed_Width_Combined ~ Provenance + (1|Provenance:Family) + (1|Provenance:Year_Collected), data = df.subset)
+anova(SeeW2, SeeW3) #year is not significant
+ranova(SeeW2)
+#SeeW_check <- check_model(SeeW2)
+
+SeeW_var <- r.squaredGLMM(SeeW2)
+res[5,1] <- SeeW_var[,1]
+res[5,2] <- (SeeW_var[,2] - SeeW_var[,1])
+res[5,3] <- SeeW_var[,2]
+res[5,4] <- 1 - SeeW_var[,2]
+
+pval[5,1] <- anova(SeeW2)$`Pr(>F)`
+pval[5,2] <- ranova(SeeW2)$`Pr(>Chisq)`[2]
+
+#Seed Length
+SeeL1 <- lm(Seed_Length_Combined ~ Provenance, data = df.subset)
+SeeL2 <- lmer(Seed_Length_Combined ~ Provenance + (1|Provenance:Family), data = df.subset)
+SeeL3 <- lmer(Seed_Length_Combined ~ Provenance + (1|Provenance:Family) + (1|Provenance:Year_Collected), data = df.subset)
+anova(SeeL2, SeeL3) #year is not significant
+ranova(SeeL2)
+#SeeL_check <- check_model(SeeL2)
+
+SeeL_var <- r.squaredGLMM(SeeL2)
+res[6,1] <- SeeL_var[,1]
+res[6,2] <- (SeeL_var[,2] - SeeL_var[,1])
+res[6,3] <- SeeL_var[,2]
+res[6,4] <- 1 - SeeL_var[,2]
+
+pval[6,1] <- anova(SeeL2)$`Pr(>F)`
+pval[6,2] <- ranova(SeeL2)$`Pr(>Chisq)`[2]
+
+#Seed/Wing Area
+SeeSamA1 <- lm(Seed_Samara_AreaRatio ~ Provenance, data = df.subset)
+SeeSamA2 <- lmer(Seed_Samara_AreaRatio ~ Provenance + (1|Provenance:Family), data = df.subset)
+SeeSamA3 <- lmer(Seed_Samara_AreaRatio ~ Provenance + (1|Provenance:Family) + (1|Provenance:Year_Collected), data = df.subset)
+anova(SeeSamA2, SeeSamA3)#year is not significant
+ranova(SeeSamA2)
+#SeeSamA_check <- check_model(SeeSamA2)
+
+SeeSamA_var <- r.squaredGLMM(SeeSamA2)
+res[7,1] <- SeeSamA_var[,1]
+res[7,2] <- (SeeSamA_var[,2] - SeeSamA_var[,1])
+res[7,3] <- SeeSamA_var[,2]
+res[7,4] <- 1 - SeeSamA_var[,2]
+
+pval[7,1] <- anova(SeeSamA2)$`Pr(>F)`
+pval[7,2] <- ranova(SeeSamA2)$`Pr(>Chisq)`[2]
+
+#Wing Width/Length
+SamWL1 <- lm(Samara_WidthLengthRatio ~ Provenance, data = df.subset)
+SamWL2 <- lmer(Samara_WidthLengthRatio ~ Provenance + (1|Provenance:Family), data = df.subset)
+SamWL3 <- lmer(Samara_WidthLengthRatio ~ Provenance + (1|Provenance:Family) + (1|Provenance:Year_Collected), data = df.subset)
+anova(SamWL2, SamWL3)#year is not significant
+ranova(SamWL2)
+#SamWL_check <- check_model(SamWL2)
+
+SamWL_var <- r.squaredGLMM(SamWL2)
+res[8,1] <- SamWL_var[,1]
+res[8,2] <- (SamWL_var[,2] - SamWL_var[,1])
+res[8,3] <- SamWL_var[,2]
+res[8,4] <- 1 - SamWL_var[,2]
+
+pval[8,1] <- anova(SamWL2)$`Pr(>F)`
+pval[8,2] <- ranova(SamWL2)$`Pr(>Chisq)`[2]
+
+```

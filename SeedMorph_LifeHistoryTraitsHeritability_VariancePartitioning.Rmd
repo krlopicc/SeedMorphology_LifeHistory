@@ -1,0 +1,633 @@
+---
+title: "FRANIG Seed Morphology - Narrow Sense Heritability & Variance Partitioning"
+author: "KyraL"
+date: "2026-01-06"
+output: html_document
+---
+#Introduction
+Here we calculate variance explained by population, family, and residual (within tree) variance for the traits measured in the greenhouse. We also calculate narrow sense heritability and additive genetic variance for each trait.
+
+#Read in data
+```{r}
+library(readxl)
+library(tidyverse)
+#time to emergence, true leaves, and compound leaves was done in excel because dates are hard to work with
+FRANIGCG_2024_LifeHistoryRawData <- read_excel("~/GitHub/Ash/FRANIG_Seed/FRANIGCG_2024_LifeHistoryRawData.xlsx")
+Fall2024_HeightData <- read_excel("~/GitHub/Ash/FRANIG_Seed/Fall2024_HeightData.xlsx")
+
+#clean greenhouse data
+#remove entries where no seed was planted
+FRANIGCG_2024_LifeHistoryRawData <- FRANIGCG_2024_LifeHistoryRawData[FRANIGCG_2024_LifeHistoryRawData$Emergence_Date_MMDDYY != "no seed" | is.na(FRANIGCG_2024_LifeHistoryRawData$Emergence_Date_MMDDYY),]
+
+#remove unnecessary columns
+pheno_cleaned <- FRANIGCG_2024_LifeHistoryRawData[,c(3:10,26:28)] #keep seed ID for now
+
+#create a seed ID column in the height sheet
+Fall2024_HeightData$Seed_ID <- paste(Fall2024_HeightData$Maternal_ID,Fall2024_HeightData$Seed_No, sep = "-")
+
+#remove unnecessary columns
+height_cleaned <- Fall2024_HeightData[,c(8,11)]
+
+#merge data frames
+df <- full_join(pheno_cleaned, height_cleaned, by = "Seed_ID")
+df$`Height(cm)` <- as.numeric(df$`Height(cm)`)
+
+```
+
+
+#Heritability Estimates
+##Emergence Timing
+
+```{r}
+#filter out entries with no emergence data
+Emergence.df <- df %>% filter(Time_to_Emergence > 0)
+
+#is the trait normal?
+hist(Emergence.df$Time_to_Emergence)
+qqnorm(Emergence.df$Time_to_Emergence)
+qqline(Emergence.df$Time_to_Emergence)
+
+#log transform to correct right skew
+Emergence.df$log_emerge <- log(Emergence.df$Time_to_Emergence)
+
+hist(Emergence.df$log_emerge)
+qqnorm(Emergence.df$log_emerge)
+qqline(Emergence.df$log_emerge)
+
+Emergence.df$sqrt_emerge <- sqrt(Emergence.df$Time_to_Emergence)
+
+hist(Emergence.df$sqrt_emerge)
+qqnorm(Emergence.df$sqrt_emerge)
+qqline(Emergence.df$sqrt_emerge)
+
+library(lme4)
+#code adapted from Volk et al 2022 AJB
+Emergence.df$Provenance <- as.factor(Emergence.df$Provenance)
+Emergence.df$Individual <- as.factor(Emergence.df$Individual)
+Emergence.df$Table <- as.factor(Emergence.df$Table)
+
+#model emergence with provenance, maternal family, and table as random effects so we can pull out the variance components
+emerge.mod <- lmer(log_emerge ~ (1|Provenance)+ (1|Provenance:Individual) + (1|Table), data = Emergence.df)
+summary(emerge.mod)
+
+# Extract residuals and fitted values
+resid_vals  <- resid(emerge.mod)
+fitted_vals <- fitted(emerge.mod)
+
+diag_df <- data.frame(
+  fitted = fitted_vals,
+  resid  = resid_vals
+)
+
+## 1. Homoscedasticity: Residuals vs Fitted
+p1 <- ggplot(diag_df, aes(x = fitted, y = resid)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_classic() +
+  labs(
+    title = "Residuals vs Fitted",
+    x = "Fitted values",
+    y = "Residuals"
+  )
+
+## 2. Q–Q plot of residuals
+p2 <- ggplot(diag_df, aes(sample = resid)) +
+  stat_qq() +
+  stat_qq_line() +
+  theme_classic() +
+  labs(
+    title = "Normal Q–Q Plot of Residuals",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles"
+  )
+
+# Print plots
+p1
+p2
+#the homoscedasticity still looks a bit off, so we may be missing a random effect
+
+vars <- as.data.frame(VarCorr(emerge.mod))
+#half siblings
+emerge.h2 <- (4*vars[1,4])/ (vars[1,4]+vars[2,4]+vars[3,4]+vars[4,4])
+emerge.h2
+emerge.VA <- (4*vars[1,4])
+#full siblings
+emerge.h2 <- (2*vars[1,4]/ (vars[1,4]+vars[2,4]+vars[3,4]))
+emerge.h2
+emerge.VA <- (2*vars[1,4])
+mean.emerge <- mean(Emergence.df$log_emerge)
+
+
+get_h2 <- function(mod) {
+  vc <- as.data.frame(VarCorr(mod))
+  
+  sigProv <- vc$vcov[vc$grp == "Provenance"]
+  sigInd  <- vc$vcov[vc$grp == "Provenance:Individual"]  # keep interaction for family
+  sigTable <- vc$vcov[vc$grp == "Table"]
+  sige    <- attr(VarCorr(mod), "sc")^2
+  
+  # Assuming half-sibs: h2 = 4 * VA / VP
+  h2 <- 4 * sigInd / (sigProv + sigInd + sigTable + sige)
+  
+  return(h2)
+}
+
+#parametric bootstrap to estimate SE and CIs
+set.seed(123)
+
+boot_h2 <- bootMer(
+  emerge.mod,
+  FUN = get_h2,
+  nsim = 1000,
+  type = "parametric",
+  use.u = FALSE
+)
+
+# Standard error
+se_h2 <- sd(boot_h2$t)
+se_h2
+
+# 95% CI
+quantile(boot_h2$t, c(0.025, 0.975))
+```
+
+
+##True leaf timing
+```{r}
+#remove entries with no true leaf date or entries that had no emergence time to use to calculate true leaf timing
+TrueLeaves.df <- FRANIGCG_2024_LifeHistoryRawData %>% filter(Time_to_TrueLeaves > 0)
+TrueLeaves.df <- TrueLeaves.df %>% filter(Time_to_TrueLeaves < 1000)
+
+#is the trait normal?
+hist(TrueLeaves.df$Time_to_TrueLeaves)
+qqnorm(TrueLeaves.df$Time_to_TrueLeaves)
+qqline(TrueLeaves.df$Time_to_TrueLeaves)
+
+#log transform to fix the right skew
+TrueLeaves.df$log_true <- log(TrueLeaves.df$Time_to_TrueLeaves)
+
+hist(TrueLeaves.df$log_true)
+qqnorm(TrueLeaves.df$log_true)
+qqline(TrueLeaves.df$log_true)
+
+
+```
+
+```{r}
+library(lme4)
+#code adapted from Volk et al 2022 AJB
+TrueLeaves.df$Provenance <- as.factor(TrueLeaves.df$Provenance)
+TrueLeaves.df$Individual <- as.factor(TrueLeaves.df$Individual)
+TrueLeaves.df$Table <- as.factor(TrueLeaves.df$Table)
+
+#model emergence with provenance, maternal famil, and table as random effects so we can pull out the variance components
+true.mod <- lmer(log_true ~ (1|Provenance)+ (1|Individual)+ (1|Table), data = TrueLeaves.df)
+summary(true.mod)
+
+# Extract residuals and fitted values
+resid_vals  <- resid(true.mod)
+fitted_vals <- fitted(true.mod)
+
+diag_df <- data.frame(
+  fitted = fitted_vals,
+  resid  = resid_vals
+)
+
+## 1. Homoscedasticity: Residuals vs Fitted
+p1 <- ggplot(diag_df, aes(x = fitted, y = resid)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_classic() +
+  labs(
+    title = "Residuals vs Fitted",
+    x = "Fitted values",
+    y = "Residuals"
+  )
+
+## 2. Q–Q plot of residuals
+p2 <- ggplot(diag_df, aes(sample = resid)) +
+  stat_qq() +
+  stat_qq_line() +
+  theme_classic() +
+  labs(
+    title = "Normal Q–Q Plot of Residuals",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles"
+  )
+
+# Print plots
+p1
+p2
+#the homoscedasticity still looks a bit off, so we may be missing a random effect
+
+vars <- as.data.frame(VarCorr(true.mod))
+true.h2 <- (4*vars[1,4]/ (vars[1,4]+vars[2,4]+vars[3,4] + vars[4,4]))
+true.h2
+true.VA <- (4*vars[1,4])
+mean.true <- mean(TrueLeaves.df$true.mod)
+
+
+#parametric bootstrap to estimate SE and CIs
+set.seed(123)
+
+boot_h2 <- bootMer(
+  true.mod,
+  FUN = get_h2,
+  nsim = 1000,
+  type = "parametric",
+  use.u = FALSE
+)
+
+# Standard error
+se_h2 <- sd(boot_h2$t)
+se_h2
+
+# 95% CI
+quantile(boot_h2$t, c(0.025, 0.975))
+```
+
+##compound leaf timing
+```{r}
+#remove entries with no compound leaf date or those missing a true leaf date to calculate time to compound leaves
+CompLeaves.df <- FRANIGCG_2024_LifeHistoryRawData %>% filter(Time_to_CompoundLeaves > 0)
+CompLeaves.df <- CompLeaves.df %>% filter(Time_to_CompoundLeaves < 1000)
+
+#is the trait normal?
+hist(CompLeaves.df$Time_to_CompoundLeaves)
+qqnorm(CompLeaves.df$Time_to_CompoundLeaves)
+qqline(CompLeaves.df$Time_to_CompoundLeaves)
+
+#does a log transform fix the right skew?
+CompLeaves.df$log_comp <- log(CompLeaves.df$Time_to_CompoundLeaves)
+
+hist(CompLeaves.df$log_comp)
+qqnorm(CompLeaves.df$log_comp)
+qqline(CompLeaves.df$log_comp)
+
+
+```
+
+```{r}
+library(lme4)
+#code adapted from Volk et al 2022 AJB
+CompLeaves.df$Provenance <- as.factor(CompLeaves.df$Provenance)
+CompLeaves.df$Individual <- as.factor(CompLeaves.df$Individual)
+CompLeaves.df$Table <- as.factor(CompLeaves.df$Table)
+
+#model emergence with provenance, maternal family, and table as random effects so we can pull out the variance components
+comp.mod <- lmer(log_comp ~ (1|Provenance)+ (1|Individual) + (1|Table), data = CompLeaves.df)
+summary(comp.mod)
+
+# Extract residuals and fitted values
+resid_vals  <- resid(comp.mod)
+fitted_vals <- fitted(comp.mod)
+
+diag_df <- data.frame(
+  fitted = fitted_vals,
+  resid  = resid_vals
+)
+
+## 1. Homoscedasticity: Residuals vs Fitted
+p1 <- ggplot(diag_df, aes(x = fitted, y = resid)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_classic() +
+  labs(
+    title = "Residuals vs Fitted",
+    x = "Fitted values",
+    y = "Residuals"
+  )
+
+## 2. Q–Q plot of residuals
+p2 <- ggplot(diag_df, aes(sample = resid)) +
+  stat_qq() +
+  stat_qq_line() +
+  theme_classic() +
+  labs(
+    title = "Normal Q–Q Plot of Residuals",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles"
+  )
+
+# Print plots
+p1
+p2
+#the homoscedasticity still looks a bit off, so we may be missing a random effect
+
+vars <- as.data.frame(VarCorr(comp.mod))
+comp.h2 <- (4*vars[1,4]/ (vars[1,4]+vars[2,4]+vars[3,4]+ vars[4,4]))
+comp.h2
+comp.VA <- (4*vars[1,4])
+mean.comp <- mean(TrueLeaves.df$comp.mod)
+
+
+#parametric bootstrap to estimate SE and CIs
+set.seed(123)
+
+boot_h2 <- bootMer(
+  comp.mod,
+  FUN = get_h2,
+  nsim = 1000,
+  type = "parametric",
+  use.u = FALSE
+)
+
+# Standard error
+se_h2 <- sd(boot_h2$t)
+se_h2
+
+# 95% CI
+quantile(boot_h2$t, c(0.025, 0.975))
+```
+
+##height
+```{r}
+#remove entries with no height value
+Height.df <- df %>% filter(`Height(cm)` > 0)
+
+#is the trait normally distributed?
+hist(Height.df$`Height(cm)`)
+qqnorm(Height.df$`Height(cm)`)
+qqline(Height.df$`Height(cm)`)
+
+#log transorm to fix the skew
+Height.df$log_height <- log(Height.df$`Height(cm)`)
+
+hist(Height.df$log_height)
+qqnorm(Height.df$log_height)
+qqline(Height.df$log_height)
+
+
+```
+
+```{r}
+library(lme4)
+#code adapted from Volk et al 2022 AJB
+Height.df$Provenance <- as.factor(Height.df$Provenance)
+Height.df$Individual <- as.factor(Height.df$Individual)
+Height.df$Table <- as.factor(Height.df$Table)
+
+
+#model emergence with provenance, maternal family, and table as random effects so we can pull out the variance components
+height.mod <- lmer(log_height ~ (1|Provenance)+ (1|Provenance:Individual) + (1|Table), data = Height.df)
+summary(height.mod)
+
+# Extract residuals and fitted values
+resid_vals  <- resid(height.mod)
+fitted_vals <- fitted(height.mod)
+
+diag_df <- data.frame(
+  fitted = fitted_vals,
+  resid  = resid_vals
+)
+
+## 1. Homoscedasticity: Residuals vs Fitted
+p1 <- ggplot(diag_df, aes(x = fitted, y = resid)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_classic() +
+  labs(
+    title = "Residuals vs Fitted",
+    x = "Fitted values",
+    y = "Residuals"
+  )
+
+## 2. Q–Q plot of residuals
+p2 <- ggplot(diag_df, aes(sample = resid)) +
+  stat_qq() +
+  stat_qq_line() +
+  theme_classic() +
+  labs(
+    title = "Normal Q–Q Plot of Residuals",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles"
+  )
+
+# Print plots
+p1
+p2
+#the homoscedasticity still looks a bit off, so we may be missing a random effect
+
+vars <- as.data.frame(VarCorr(height.mod))
+height.h2 <- (4*vars[1,4])/ (vars[1,4]+vars[2,4]+vars[3,4] + vars[4,4])
+height.h2
+height.VA <- (4*vars[1,4])
+mean.height <- mean(Height.df$height.mod)
+
+
+#parametric bootstrap to estimate SE and CIs
+set.seed(123)
+
+boot_h2 <- bootMer(
+  height.mod,
+  FUN = get_h2,
+  nsim = 1000,
+  type = "parametric",
+  use.u = FALSE
+)
+
+# Standard error
+se_h2 <- sd(boot_h2$t)
+se_h2
+
+# 95% CI
+quantile(boot_h2$t, c(0.025, 0.975))
+```
+
+###testing 
+The heritability value for height seems extremely high. This code was used to test how the addition of table as a random effect, log transforming the data, and using different relatedness coefficients affected heritability values. We found that log transformation does inflate heritability because it transforms the variance components. We also see that adding Table as a fixed effect explains additional variance. Finally, we report in the main text heritability values for r = 1/4 assuming half sibling relationships. Given that seeds may be more related than that, we report heritability ar r = 1/2 (full sibligs) as a lower estimate of heritability.
+```{r}
+Height.df$Provenance <- as.factor(Height.df$Provenance)
+Height.df$Individual <- as.factor(Height.df$Individual)
+Height.df$Table <- as.factor(Height.df$Table)
+
+#testing the addition of table
+height.mod1 <- lmer(`Height(cm)` ~ (1|Provenance)+ (1|Provenance:Individual), data = Height.df)
+height.mod2 <- lmer(`Height(cm)` ~ (1|Provenance)+ (1|Provenance:Individual) + (1|Table), data = Height.df)
+
+plot(height.mod1)
+qqnorm(resid(height.mod1))
+qqline(resid(height.mod1))
+
+plot(height.mod2)
+qqnorm(resid(height.mod2))
+qqline(resid(height.mod2))
+
+vars1 <- as.data.frame(VarCorr(height.mod1))
+height.h2.1 <- (4*vars1[1,4])/ (vars1[1,4]+vars1[2,4]+vars1[3,4])
+height.h2.1
+
+vars2 <- as.data.frame(VarCorr(height.mod2))
+height.h2.2 <- (4*vars2[1,4])/ (vars2[1,4]+vars2[2,4]+vars2[3,4]+vars2[4,4])
+height.h2.2
+
+#Testing the addition of table with the log transformed trait
+height.mod3 <- lmer(log_height ~ (1|Provenance)+ (1|Provenance:Individual), data = Height.df)
+height.mod4 <- lmer(log_height ~ (1|Provenance)+ (1|Provenance:Individual) + (1|Table), data = Height.df)
+
+plot(height.mod3)
+qqnorm(resid(height.mod3))
+qqline(resid(height.mod3))
+
+plot(height.mod4)
+qqnorm(resid(height.mod4))
+qqline(resid(height.mod4))
+
+vars3 <- as.data.frame(VarCorr(height.mod3))
+height.h2.3 <- (4*vars3[1,4])/ (vars3[1,4]+vars3[2,4]+vars3[3,4])
+height.h2.3
+
+vars4 <- as.data.frame(VarCorr(height.mod4))
+height.h2.4 <- (4*vars4[1,4])/ (vars4[1,4]+vars4[2,4]+vars4[3,4]+vars4[4,4])
+height.h2.4
+
+#try adding seed weight as a fixed effect to account for maternal provisioning
+
+FRANIG_SeedMorphology_AllTraits <- read_csv("~/GitHub/Ash/FRANIG_Seed/FRANIG_SeedMorphology_AllTraits.csv")
+FRANIG_SeedMorphology_AllTraits$Seed_Weight <- as.numeric(FRANIG_SeedMorphology_AllTraits$Seed_Weight)
+colnames(FRANIG_SeedMorphology_AllTraits)[3] <- "Individual"
+
+seed_weight <- aggregate(Seed_Weight ~ Individual, data = FRANIG_SeedMorphology_AllTraits, FUN = mean)
+
+height.df <- left_join(Height.df, seed_weight, by = "Individual")
+
+height.mod5 <- lmer(log_height ~ Seed_Weight + (1|Provenance)+ (1|Provenance:Individual) + (1|Table), data = height.df)
+```
+
+##full sibling heritability estimates
+```{r, cache=TRUE}
+vars <- as.data.frame(VarCorr(emerge.mod))
+emerge.h2 <- (2*vars4[1,4])/ (vars4[1,4]+vars4[2,4]+vars4[3,4]+vars4[4,4])
+emerge.h2
+emerge.VA <- (2*vars[1,4])
+
+get_h2 <- function(mod) {
+  vc <- as.data.frame(VarCorr(mod))
+  
+  sigProv <- vc$vcov[vc$grp == "Provenance"]
+  sigInd  <- vc$vcov[vc$grp == "Provenance:Individual"]  # keep interaction for family
+  sigTable <- vc$vcov[vc$grp == "Table"]
+  sige    <- attr(VarCorr(mod), "sc")^2
+  
+  # Assuming full-sibs: h2 = 2 * VA / VP
+  h2 <- 2 * sigInd / (sigProv + sigInd + sigTable + sige)
+  
+  return(h2)
+}
+
+set.seed(123)
+
+boot_h2 <- bootMer(
+  emerge.mod,
+  FUN = get_h2,
+  nsim = 1000,
+  type = "parametric",
+  use.u = FALSE
+)
+
+# Standard error
+se_h2 <- sd(boot_h2$t)
+se_h2
+
+# 95% CI
+quantile(boot_h2$t, c(0.025, 0.975))
+```
+
+#Variance Partitioning
+```{r}
+#code adapted from Volk et al 2022 & DiSanto et al 2021
+library(sjPlot)
+library(lme4)
+library(performance)
+library(see)
+library(lmerTest)
+library(MuMIn)
+
+res <- matrix(nrow = 4, ncol = 4)
+#make matrix with r squared values for each seed measurement (i.e. 4 rows (traits) and 3 columns (r-squared values))
+rownames(res) <- colnames(df[9:12])
+colnames(res) <- c("R2_Pop", "R2_MatFam", "R2_Tot", "R2_Err")
+
+pval <- matrix(nrow = 4, ncol = 2)
+rownames(pval) <- colnames(df[9:12])
+colnames(pval) <- c("Pop", "MatFam")
+
+#emergence
+emerge <- lmer(log_emerge ~ Provenance + (1|Provenance:Individual), data = Emergence.df)
+
+emerge_var <- r.squaredGLMM(emerge)
+res[1,1] <- emerge_var[,1]
+res[1,2] <- (emerge_var[,2] - emerge_var[,1])
+res[1,3] <- emerge_var[,2]
+res[1,4] <- 1 - emerge_var[,2]
+
+pval[1,1] <- anova(emerge)$`Pr(>F)`
+pval[1,2] <- ranova(emerge)$`Pr(>Chisq)`[2]
+
+#true leaves
+true <- lmer(log_true ~ Provenance + (1|Provenance:Individual), data = TrueLeaves.df)
+
+true_var <- r.squaredGLMM(true)
+res[2,1] <- true_var[,1]
+res[2,2] <- (true_var[,2] - true_var[,1])
+res[2,3] <- true_var[,2]
+res[2,4] <- 1 - true_var[,2]
+
+pval[2,1] <- anova(true)$`Pr(>F)`
+pval[2,2] <- ranova(true)$`Pr(>Chisq)`[2]
+
+#compound leaves
+comp <- lmer(log_comp ~ Provenance + (1|Provenance:Individual), data = CompLeaves.df)
+
+comp_var <- r.squaredGLMM(comp)
+res[3,1] <- comp_var[,1]
+res[3,2] <- (comp_var[,2] - comp_var[,1])
+res[3,3] <- comp_var[,2]
+res[3,4] <- 1 - comp_var[,2]
+
+pval[3,1] <- anova(comp)$`Pr(>F)`
+pval[3,2] <- ranova(comp)$`Pr(>Chisq)`[2]
+
+#height
+height <- lmer(log_height ~ Provenance + (1|Provenance:Individual), data = Height.df)
+
+height_var <- r.squaredGLMM(height)
+res[4,1] <- height_var[,1]
+res[4,2] <- (height_var[,2] - height_var[,1])
+res[4,3] <- height_var[,2]
+res[4,4] <- 1 - height_var[,2]
+
+pval[4,1] <- anova(height)$`Pr(>F)`
+pval[4,2] <- ranova(height)$`Pr(>Chisq)`[2]
+
+write.csv(res, file = "LifeHistoryTraits_VariancePartitioning.csv")
+
+
+#does adding table as a random effect change variance partitioning results?
+get_var_partition <- function(model) {
+  vc <- as.data.frame(VarCorr(model))
+  
+  vars <- setNames(vc$vcov, vc$grp)
+  total <- sum(vars)
+  
+  props <- vars / total
+  
+  return(props)
+}
+emerge_vp <- lmer(log_emerge ~ 1 + (1|Provenance) + (1|Provenance:Individual) + (1|Table), data = Emergence.df)
+true_vp   <- lmer(log_true   ~ 1 + (1|Provenance) + (1|Provenance:Individual) + (1|Table), data = TrueLeaves.df)
+comp_vp   <- lmer(log_comp   ~ 1 + (1|Provenance) + (1|Provenance:Individual) + (1|Table), data = CompLeaves.df)
+height_vp <- lmer(log_height ~ 1 + (1|Provenance) + (1|Provenance:Individual) + (1|Table), data = Height.df)
+
+res <- rbind(
+  get_var_partition(emerge_vp),
+  get_var_partition(true_vp),
+  get_var_partition(comp_vp),
+  get_var_partition(height_vp)
+)
+
+write.csv(res, "LifeHistoryTraits_VariancePartitioning_withTable.csv")
+
+```
+
+

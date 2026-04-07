@@ -1,0 +1,516 @@
+---
+title: "FRANIG Seed Morphology - Data Cleaning"
+author: "KyraL"
+date: "2025-01-13"
+output: html_document
+---
+#Introduction
+This R Notebook contains the code for cleaning and merging the data from the Fraxinus nigra seed morphology x-ray data. The data was collected in 2024 by Melissa Lehrer, Jacob Mazza, and Alex Moen. Seed and samara area, width, and length were calculated from segmented images analyzed using the centroid feature in ImageJ.
+
+#Cleaning Data
+Each person's data was imported and cleaned separately as each person followed sightly different formats for their csv files.
+
+##MAL Data Cleaning
+
+###Read in the data
+```{r}
+setwd("~/GitHub/Ash/FRANIG_Seed")
+library(readxl)
+library(dplyr)
+
+#Read in all of the csv files created by MAL
+file_directory <- "~/GitHub/Ash/FRANIG_Seed/Melissa"
+csv_files <- list.files(file_directory, pattern = "*.csv", full.names = T)
+data_list <- lapply(csv_files, function(file) {
+  data <- read_csv(file)
+  
+  # Ensure the `Latitude` column exists and is numeric
+  if ("Latitude" %in% names(data)) {
+    data$Latitude <- as.numeric(data$Latitude)
+  } else {
+    # Add a Latitude column filled with NA if it doesn't exist
+    data$Latitude <- NA
+  }
+  
+  # Ensure the `Single_Seed_Weight` column exists and is numeric
+  if ("Single_Seed_Weight" %in% names(data)) {
+    data$Single_Seed_Weight <- as.numeric(data$Single_Seed_Weight)
+  } else {
+    # Add a Single_Seed_Weight column filled with NA if it doesn't exist
+    data$Single_Seed_Weight <- NA
+  }
+  
+  # Ensure the `SeedOrder` column exists and is numeric
+  if ("SeedOrder" %in% names(data)) {
+    data$SeedOrder <- as.numeric(data$SeedOrder)
+  } else {
+    # Add a SeedOrder column filled with NA if it doesn't exist
+    data$SeedOrder <- NA
+  }
+  
+  return(data)
+})
+
+#Combine all of the csv files into one data_frame with all columns retained
+combined_data <- bind_rows(data_list)
+
+#write the uncleaned data as a csv file for back-up purposes
+write.csv(combined_data, "MergedData_Unclean_MAL.csv")
+```
+
+###Combine columns of values named different things but referring to the same measurement
+The columns for each morphology trait were not consistent across all samples. For instance, some families had samara area under `Samara_Area` while others had it under `SamA`. This code combined entries from those columns into one column. Note that for MAL's data, the `Seed_Order_Combined` column refers to the number of the seed in each analyzed image, while in JM and AM's data it refers to the samara number.
+```{r}
+# Combine columns `Samara_Area` and `SamA` into a new column `Samara_Area_Combined`
+combined_data_SamAMerged <- combined_data %>%
+    mutate(Samara_Area_Combined = coalesce(Samara_Area, SamA)) %>%
+  select(-Samara_Area, -SamA) # Optionally remove the original columns
+
+# Combine columns `Samara_Length` and `SamL` into a new column `Samara_Length_Combined`
+combined_data_SamLMerged <- combined_data_SamAMerged %>%
+     mutate(Samara_Length_Combined = coalesce(Samara_Length, SamL)) %>%
+    select(-Samara_Length, -SamL) # Optionally remove the original columns
+ 
+# Combine columns `Samara_Width` and `SamW` into a new column `Samara_Width_Combined`
+combined_data_SamWMerged <- combined_data_SamLMerged %>%
+    mutate(Samara_Width_Combined = coalesce(Samara_Width, SamW)) %>%
+     select(-Samara_Width, -SamW) # Optionally remove the original columns
+
+# Combine columns `Seed_Area` , `SeA`, and `SeeA` into a new column `Seed_Area_Combined`
+combined_data_SeeAMerged <- combined_data_SamWMerged %>%
+     mutate(Seed_Area_Combined = coalesce(Seed_Area, SeA, SeeA)) %>%
+    select(-Seed_Area, -SeA, -SeeA) # Optionally remove the original columns
+
+# Combine columns `Seed_Length`, `SeL`, `SeeL`, and `SeX` into a new column `Seed_Length_Combined`
+combined_data_SeeLMerged <- combined_data_SeeAMerged %>%
+    mutate(Seed_Length_Combined = coalesce(Seed_Length, SeL, SeeL, SeX)) %>%
+     select(-Seed_Length, -SeL, -SeeL, -SeX) # Optionally remove the original columns
+
+# Combine columns `Seed_Width`, `SeW`, `SeeW`, and `SeY` into a new column `Seed_Width_Combined`
+combined_data_SeeWMerged <- combined_data_SeeLMerged %>%
+   mutate(Seed_Width_Combined = coalesce(Seed_Width, SeW, SeeW, SeY)) %>%
+     select(-Seed_Width, -SeW, -SeeW, -SeW) # Optionally remove the original columns
+
+# Combine columns `Seed_Number`, `SeedOrder`, `Seed_Order`, and `seedorder` into a new column `Seed_Order_Combined`
+combined_data_SeedNo <- combined_data_SeeWMerged %>%
+    mutate(Seed_Order_Combined = coalesce(Seed_Number, SeedOrder, Seed_Order, seedorder)) %>%
+   select(-Seed_Number, -SeedOrder, -Seed_Order, -seedorder) # Optionally remove the original columns
+
+#Remove unnecessary columns and keep only the data
+combined_data_MAL_clean <- combined_data_SeedNo[,c(1,18:24)]
+```
+
+###Sanity check
+Check that the data was merged correctly by comparing the raw data from the csv file with the entries in the merged dataframe.
+```{r}
+#FRANIG-NB-IVL-4
+data_list[[1]] #data from the read-in file
+combined_data_MAL_clean[combined_data_MAL_clean$Label == "FRANIG-NB-IVL-4",] #data from the merged file
+
+```
+
+###Swap Length & Width
+In some cases, the length and width measurements for the seeds and samaras were switched during data entry or during the ImageJ analysis. Biologically, the samara and seed length should always be longer than the width. This code identifies scenarios where the width entered is larger than the length and swaps the values.
+```{r}
+#Switch samara length and width when width > length
+combined_data_SamLWswap <- combined_data_MAL_clean %>%
+  mutate(
+    original_Samara_Width_Combined = Samara_Width_Combined,
+    original_Samara_Length_Combined = Samara_Length_Combined,
+    Samara_Width_Combined = if_else(original_Samara_Width_Combined > original_Samara_Length_Combined, original_Samara_Length_Combined, original_Samara_Width_Combined),
+    Samara_Length_Combined = if_else(original_Samara_Width_Combined > original_Samara_Length_Combined, original_Samara_Width_Combined, original_Samara_Length_Combined)
+  ) %>%
+  select(-original_Samara_Width_Combined, -original_Samara_Length_Combined)  # Remove the temporary columns if needed
+
+#Switch seed length and width when width > length
+combined_data_SeeLWswap <- combined_data_SamLWswap %>%
+  mutate(
+    original_Seed_Width_Combined = Seed_Width_Combined,
+    original_Seed_Length_Combined = Seed_Length_Combined,
+    Seed_Width_Combined = if_else(original_Seed_Width_Combined > original_Seed_Length_Combined, original_Seed_Length_Combined, original_Seed_Width_Combined),
+    Seed_Length_Combined = if_else(original_Seed_Width_Combined > original_Seed_Length_Combined, original_Seed_Width_Combined, original_Seed_Length_Combined)
+  ) %>%
+  select(-original_Seed_Width_Combined, -original_Seed_Length_Combined)  # Remove the temporary columns if needed
+```
+
+###final cleaning details
+```{r}
+#remove the .tiff suffix from the Family name
+combined_data_SeeLWswap$Label <- sub("\\.tif$", "", combined_data_SeeLWswap$Label)
+
+#rename the label column as family
+colnames(combined_data_SeeLWswap)[colnames(combined_data_SeeLWswap) == "Label"] <- "Family"
+
+#create Provenance and Seed_ID columns
+combined_data_SeeLWswap$Provenance <- substr(combined_data_SeeLWswap$Family,11,13)
+# Join two columns with a hyphen in the middle
+combined_data_SeeLWswap$Individual_ID <- paste(combined_data_SeeLWswap$Family, combined_data_SeeLWswap$Seed_Order_Combined, sep = "-")
+
+#rename dataframe with a logical name and save the data to a csv file
+MAL_CleanSeedData_Merged <- combined_data_SeeLWswap
+write.csv(MAL_CleanSeedData_Merged, file = "MergedData_Clean_MAL.csv")
+```
+
+##Clean Data JM
+###Read in the data
+```{r}
+file_directory <- "~/GitHub/Ash/FRANIG_Seed/Jacob"
+csv_files <- list.files(file_directory, pattern = "*.csv", full.names = T)
+data_list <- lapply(csv_files, function(file) {
+  data <- read_csv(file)
+  
+  #Standardize column names to lowercase
+  colnames(data) <- tolower(colnames(data))
+  
+  #List of possible column names for seed order
+  seed_order_columns <- c("seedorder", "in seed order", "seed_order")
+  
+  #Loop through each column name variant and handle missing or mismatched columns
+  for (col in seed_order_columns) {
+    if (col %in% names(data)) {
+      data[[col]] <- as.numeric(data[[col]])  #Convert to numeric
+    } else {
+      data[[col]] <- NA  #Add the column filled with NA if the other columns are empty
+    }
+  }
+  
+  return(data)
+})
+
+#Combine all of the csv files into one data_frame with all columns retained
+combined_data <- bind_rows(data_list)
+
+#write the uncleaned data as a csv file for back-up purposes
+write.csv(combined_data, file = "MergedData_Unclean_JM.csv")
+```
+
+###Remove rows with NA values
+Jacob had to manually convert some measurements from pixels to mm. He kept the pixel data in the csv files so we want to remove those rows which should have NA in the 'label' column.
+```{r}
+#remove any rows where label = NA
+combined_data_noPixelMeasurements <- combined_data %>% filter(!is.na(label))
+```
+
+###Combine columns of values named different things but referring to the same measurement
+
+```{r}
+#rename 'sama' as 'Samara_Area_Combined
+colnames(combined_data_noPixelMeasurements)[colnames(combined_data_noPixelMeasurements) == "sama"] <- "Samara_Area_Combined"
+
+#combine 'saml', 'samy...8', 'saml...8' and rename column 'Samara_Length_Combined'
+combined_data_SamLMerged <- combined_data_noPixelMeasurements %>%
+     mutate(Samara_Length_Combined = coalesce(saml,samy...8,saml...8)) %>%
+    select(-saml, -samy, -samy...8) # Optionally remove the original columns
+
+#combine 'samw', 'samw...7' and rename column 'Samara_Width_Combined'
+combined_data_SamWMerged <- combined_data_SamLMerged %>%
+    mutate(Samara_Width_Combined = coalesce(samw, samw...7)) %>%
+     select(-samw, -samw...7) # Optionally remove the original columns
+
+#combine 'seea', 'sea' and rename column 'Seed_Area_Combined'
+combined_data_SeeAMerged <- combined_data_SamWMerged %>%
+     mutate(Seed_Area_Combined = coalesce(seea, sea)) %>%
+    select(-seea, -sea) # Optionally remove the original columns
+
+#combine 'seel', 'sel', 'sey...14' and rename column 'Seed_Length_Combined'
+combined_data_SeeLMerged <- combined_data_SeeAMerged %>%
+    mutate(Seed_Length_Combined = coalesce(seel, sel, sey...14)) %>%
+     select(-seel, -sel, -sey...14) # Optionally remove the original columns
+
+#combine 'seew', 'sew' and rename column 'Seed_Width_Combined'
+combined_data_SeeWMerged <- combined_data_SeeLMerged %>%
+   mutate(Seed_Width_Combined = coalesce(seew, sew)) %>%
+     select(-seew, -sew) # Optionally remove the original columns
+
+#combine 'samara_order', `samara order`, '...1', `samara aorder`,`sqamara order` and rename column 'Seed_Order_Combined'
+combined_data_SeedNo <- combined_data_SeeWMerged %>%
+    mutate(Seed_Order_Combined = coalesce(samara_order, `samara order`, ...1, `samara aorder`,`sqamara order`)) %>%
+   select(-samara_order, -`samara order`, -...1, -`samara aorder`,-`sqamara order`) # Optionally remove the original columns
+
+#Remove unnecessary columns and keep only the data
+combined_data_JM_clean <- combined_data_SeedNo[,c(2:3,10,32:37)]
+```
+
+###Sanity check
+Check that the data was merged correctly by comparing the raw data from the csv file with the entries in the merged dataframe.
+```{r}
+#FRANIG-MN-BUF-1
+data_list[[1]] #data from the read-in file
+combined_data_JM_clean[combined_data_JM_clean$label == "FRANIG-MN-BUF-1.tif",] #data from the merged file
+
+```
+###Swap Length & Width
+```{r}
+#Swap columns where samara width is greater than samara width
+combined_data_SamLWswap <- combined_data_JM_clean %>%
+  mutate(
+    original_Samara_Width_Combined = Samara_Width_Combined,
+    original_Samara_Length_Combined = Samara_Length_Combined,
+    Samara_Width_Combined = if_else(original_Samara_Width_Combined > original_Samara_Length_Combined, original_Samara_Length_Combined, original_Samara_Width_Combined),
+    Samara_Length_Combined = if_else(original_Samara_Width_Combined > original_Samara_Length_Combined, original_Samara_Width_Combined, original_Samara_Length_Combined)
+  ) %>%
+  select(-original_Samara_Width_Combined, -original_Samara_Length_Combined)  # Remove the temporary columns if needed
+
+#Swap columns where seed width is greater than seed length
+combined_data_SeeLWswap <- combined_data_SamLWswap %>%
+  mutate(
+    original_Seed_Width_Combined = Seed_Width_Combined,
+    original_Seed_Length_Combined = Seed_Length_Combined,
+    Seed_Width_Combined = if_else(original_Seed_Width_Combined > original_Seed_Length_Combined, original_Seed_Length_Combined, original_Seed_Width_Combined),
+    Seed_Length_Combined = if_else(original_Seed_Width_Combined > original_Seed_Length_Combined, original_Seed_Width_Combined, original_Seed_Length_Combined)
+  ) %>%
+  select(-original_Seed_Width_Combined, -original_Seed_Length_Combined)  # Remove the temporary columns if needed
+```
+
+###final cleaning details
+```{r}
+#remove the 'tif' suffix
+combined_data_SeeLWswap$label <- sub("\\.tif$", "", combined_data_SeeLWswap$label)
+
+#rename the label column 'Family"
+colnames(combined_data_SeeLWswap)[colnames(combined_data_SeeLWswap) == "label"] <- "Family"
+
+#make provenance and individual seed ID columns
+combined_data_SeeLWswap$Provenance <- substr(combined_data_SeeLWswap$Family,11,13)
+# Join two columns with a hyphen in the middle
+combined_data_SeeLWswap$Individual_ID <- paste(combined_data_SeeLWswap$Family, combined_data_SeeLWswap$Seed_Order_Combined, sep = "-")
+
+#rename dataframe with unique title and save as csv
+JM_CleanSeedData_Merged <- combined_data_SeeLWswap
+write.csv(JM_CleanSeedData_Merged, file = "MergedData_Clean_JM.csv")
+
+```
+
+##Clean Data AM
+###Read in the data
+```{r}
+file_directory <- "~/GitHub/Ash/FRANIG_Seed/Alex"
+csv_files <- list.files(file_directory, pattern = "*.csv", full.names = T)
+data_list <- lapply(csv_files, function(file) {
+  data <- read_csv(file)
+  
+  #Standardize column names to lowercase
+  colnames(data) <- tolower(colnames(data))
+  
+  #List of possible column names for seed order
+  seed_order_columns <- c("seedorder", "seed_order", "seed order")
+  
+  # Loop through each column name variant and handle missing or mismatched columns
+  for (col in seed_order_columns) {
+    if (col %in% names(data)) {
+      data[[col]] <- as.numeric(data[[col]])  # Convert to numeric
+    } else {
+      data[[col]] <- NA  # Add the column filled with NA
+    }
+  }
+  
+  #list of columns that are present in some files but absent in others
+  misc_columns <- c("sama", "saml", "...1", "x...4","y...5","samw","angle...8","label...10","seea","seew","seel")
+  
+  # Loop through each column name variant and handle missing or mismatched columns
+  for (col in misc_columns) {
+    if (col %in% names(data)) {
+      data[[col]] <- as.numeric(data[[col]])  # Convert to numeric
+    } else {
+      data[[col]] <- NA  # Add the column filled with NA
+    }
+  }
+  # Return the modified data frame
+  return(data)
+})
+
+#combine all dataframes into one
+combined_data <- bind_rows(data_list)
+
+#save uncleaned data as csv for records
+write.csv(combined_data, file = "MergedData_Unclean_AM.csv")
+```
+
+###Remove rows with NA values
+```{r}
+#remove rows where every entry is NA
+combined_data_noNA <- combined_data %>%
+  filter(!if_all(everything(), is.na))
+```
+
+###Combine columns of values named different things but referring to the same measurement
+```{r}
+# Combine columns 'sama', 'area...3', 'sama...3', area into a new column `Samara_Area_Combined`
+combined_data_SamAMerged <- combined_data_noNA %>%
+    mutate(Samara_Area_Combined = coalesce(sama, area...3, sama...3, area)) %>%
+  select(-sama, -area...3, -sama...3, -area) # Optionally remove the original columns
+
+# Combine columns 'saml', 'saml...6', 'major...6', 'major' into a new column `Samara_Length_Combined`
+combined_data_SamLMerged <- combined_data_SamAMerged %>%
+     mutate(Samara_Length_Combined = coalesce(saml, saml...6, major...6, major)) %>%
+    select(-saml, -saml...6, -major...6, -major) # Optionally remove the original columns
+ 
+# Combine columns 'samw', `samw+j1`, 'samw...7', 'minor...7', 'minor' into a new column `Samara_Width_Combined`
+combined_data_SamWMerged <- combined_data_SamLMerged %>%
+    mutate(Samara_Width_Combined = coalesce(samw, `samw+j1`, samw...7, minor...7, minor)) %>%
+     select(-samw, -`samw+j1`, -samw...7, -minor...7, -minor) # Optionally remove the original columns
+
+# Combine columns 'seea', 'area...10', 'sama...10' into a new column `Seed_Area_Combined`
+combined_data_SeeAMerged <- combined_data_SamWMerged %>%
+     mutate(Seed_Area_Combined = coalesce(seea, area...10,sama...10)) %>%
+    select(-seea, -area...10, -sama...10) # Optionally remove the original columns
+
+# Combine columns 'seel', 'saml...13', 'major...13' into a new column `Seed_Length_Combined`
+combined_data_SeeLMerged <- combined_data_SeeAMerged %>%
+    mutate(Seed_Length_Combined = coalesce(seel, saml...13, major...13)) %>%
+     select(-seel, -saml...13, -major...13) # Optionally remove the original columns
+
+# Combine columns 'seew', 'samw...14', 'minor...14' into a new column `Seed_Width_Combined`
+combined_data_SeeWMerged <- combined_data_SeeLMerged %>%
+   mutate(Seed_Width_Combined = coalesce(seew, samw...14, minor...14)) %>%
+     select(-seew, -samw...14, -minor...14) # Optionally remove the original columns
+ 
+
+# Combine columns 'samara_order', '...1' into a new column `Seed_Order_Combined`
+combined_data_SeedNo <- combined_data_SeeWMerged %>%
+    mutate(Seed_Order_Combined = coalesce(samara_order, ...1)) %>%
+   select(-samara_order, -...1) # Optionally remove the original columns
+
+#remove unnecessary columns
+combined_data_AM_clean <- combined_data_SeedNo[,c(1,9,32:38)]
+```
+
+
+###Sanity check
+Check that the data was merged correctly by comparing the raw data from the csv file with the entries in the merged dataframe.
+```{r}
+#FRANIG-IA-OTC-1
+data_list[[1]] #data from the read-in file
+combined_data_AM_clean[combined_data_AM_clean$label...2 == "FRANIG-IA-OTC-1.tif",] #data from the merged file
+```
+
+###Swap length & width
+```{r}
+#swap columns if samara width is greater than samara length
+combined_data_SamLWswap <- combined_data_AM_clean %>%
+  mutate(
+    original_Samara_Width_Combined = Samara_Width_Combined,
+    original_Samara_Length_Combined = Samara_Length_Combined,
+    Samara_Width_Combined = if_else(original_Samara_Width_Combined > original_Samara_Length_Combined, original_Samara_Length_Combined, original_Samara_Width_Combined),
+    Samara_Length_Combined = if_else(original_Samara_Width_Combined > original_Samara_Length_Combined, original_Samara_Width_Combined, original_Samara_Length_Combined)
+  ) %>%
+  select(-original_Samara_Width_Combined, -original_Samara_Length_Combined)  # Remove the temporary columns if needed
+
+#swap columns if seed width is greater than seed length
+combined_data_SeeLWswap <- combined_data_SamLWswap %>%
+  mutate(
+    original_Seed_Width_Combined = Seed_Width_Combined,
+    original_Seed_Length_Combined = Seed_Length_Combined,
+    Seed_Width_Combined = if_else(original_Seed_Width_Combined > original_Seed_Length_Combined, original_Seed_Length_Combined, original_Seed_Width_Combined),
+    Seed_Length_Combined = if_else(original_Seed_Width_Combined > original_Seed_Length_Combined, original_Seed_Width_Combined, original_Seed_Length_Combined)
+  ) %>%
+  select(-original_Seed_Width_Combined, -original_Seed_Length_Combined)  # Remove the temporary columns if needed
+```
+
+###final cleaning details
+```{r}
+#remove 'tif' suffix from family names
+combined_data_SeeLWswap$label...2 <- sub("\\.tif$", "", combined_data_SeeLWswap$label...2)
+
+#rename the label column as 'Family'
+colnames(combined_data_SeeLWswap)[colnames(combined_data_SeeLWswap) == "label...2"] <- "Family"
+
+#create provenance and individual seed ID columns
+combined_data_SeeLWswap$Provenance <- substr(combined_data_SeeLWswap$Family,11,13)
+# Join two columns with a hyphen in the middle
+combined_data_SeeLWswap$Individual_ID <- paste(combined_data_SeeLWswap$Family, combined_data_SeeLWswap$Seed_Order_Combined, sep = "-")
+
+#rename dataframe and save data as csv file for records
+AM_CleanSeedData_Merged <- combined_data_SeeLWswap
+write.csv(AM_CleanSeedData_Merged, file = "MergedData_Clean_JM.csv")
+
+```
+
+#Merging Data
+
+##merge dataframes
+```{r}
+#before merging, add a column to each person's cleaned data to make tracking down raw data easier
+AM_CleanSeedData_Merged$Collector <- "AM"
+MAL_CleanSeedData_Merged$Collector <- "MAL"
+JM_CleanSeedData_Merged$Collector <- "JM"
+
+#merge all data into one big data frame
+all_data_merged <- bind_rows(AM_CleanSeedData_Merged, JM_CleanSeedData_Merged, MAL_CleanSeedData_Merged)
+write.csv(all_data_merged, file = "AllSeedData_Merged_Unclean.csv")
+```
+
+##quality control
+This code is to look for measurements that biologically don't make sense such as seed area being greater than samara area.
+```{r}
+#is seed area > samara area
+df1 <- all_data_merged %>%
+  mutate(Seed_Area_Greater = Seed_Area_Combined > Samara_Area_Combined)
+df2 <- df1 %>%
+  mutate(Seed_Area_Equal = Seed_Area_Combined == Samara_Area_Combined)
+  #it looks like something is wrong with NB-IVL-9, we will remove the entire family as well as any other instances where the seed area is greater than the samara area
+df3 <- df2 %>%
+  filter(Family != "FRANIG-NB-IVL-9")
+df4 <- df3 %>%
+  filter(Seed_Area_Greater != "TRUE" | is.na(Seed_Area_Greater))
+
+#is samara width > samara length
+df5 <- df4 %>%
+  mutate(Samara_Width_Greater = Samara_Width_Combined > Samara_Length_Combined)
+#is seed width > seed length
+df6 <- df5 %>%
+  mutate(Seed_Width_Greater = Seed_Width_Combined > Seed_Length_Combined)
+#is seed length > seed area
+df7 <- df6 %>%
+  mutate(Seed_Length_Area = Seed_Length_Combined > Seed_Area_Combined)
+  #keeping these values for now becuase they may be real
+
+#is seed width > seed area
+df8 <- df7 %>%
+  mutate(Seed_Width_Area = Seed_Width_Combined > Seed_Area_Combined)
+
+#is samara width > samara area
+df9 <- df8 %>%
+  mutate(Samara_Width_Area = Samara_Width_Combined > Samara_Area_Combined)
+
+#is samara length > samara area
+df10 <- df9 %>%
+  mutate(Samara_Length_Area = Samara_Length_Combined > Samara_Area_Combined)
+
+#is seed length > samara length
+df11 <- df10 %>%
+  mutate(Seed_Samara_length = Seed_Length_Combined > Samara_Length_Combined)
+
+```
+
+##remove problematic entries
+```{r}
+#remove columns where seed length is greater than samara length or seed_samara_length is NA
+df12 <- df11 %>%
+  filter(Seed_Samara_length != "TRUE" | is.na(Seed_Samara_length))
+
+#remove entries with no 'Family' ID
+df12.1 <- df12 %>%
+    filter(Family != "n/a")
+
+#remove entries that contain only seed or samara values
+df12.2 <- df12.1 %>%
+  filter(!is.na(Seed_Area_Combined))
+
+#remove entries tagged as merges/fused samaras
+df12.3 <- df12.2 %>%
+  filter(is.na(notes))
+
+#remove duplicate values which are unnoted merged samaras or split seeds
+df12.3$Individual_ID <- as.factor(df12.3$Individual_ID)
+df12.4 <- df12.3 %>%
+  group_by(Individual_ID) %>%
+  filter(n() == 1) %>%
+  ungroup()
+
+#remove extraneous columns
+Cleaned_SeedData <- df12.4[,c(1,3:12)]
+
+#save cleaned and merged data to csv file
+write.csv(Cleaned_SeedData, file = "AllSeedData_Merged_Clean.csv")
+```

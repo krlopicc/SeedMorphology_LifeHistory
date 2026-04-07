@@ -1,0 +1,692 @@
+---
+title: "FRANIG Seed Morphology - Aster Models"
+author: "KyraL"
+date: "2026-01-07"
+output: html_document
+---
+#Introduction
+The code here was used to construct Aster life history models and predict cumulative fitness for each population. Those fitness predictions were then used in linear regression to test if population climat of origin predicts seedlings fitness.
+
+#Clean the full dataset
+```{r}
+#time to emergence, true leaves, and compound leaves was done in excel because dates are hard to work with
+Aster_PhenologyData <- read_excel("FRANIGCG_2024_LifeHistoryRawData.xlsx")
+Aster_HeightData <- read_excel("Fall2024_HeightData.xlsx")
+
+#remove entries where no seed was planted
+Aster_PhenologyData <- Aster_PhenologyData[Aster_PhenologyData$Emergence_Date_MMDDYY != "no seed" | is.na(Aster_PhenologyData$Emergence_Date_MMDDYY),]
+
+#remove unnecessary columns
+pheno_cleaned <- Aster_PhenologyData[,c(3:10,26:28)] #keep seed ID for now
+
+#create a seed ID column in the height sheet
+Aster_HeightData$Seed_ID <- paste(Aster_HeightData$Maternal_ID,Aster_HeightData$Seed_No, sep = "-")
+#remove unnecessary columns
+height_cleaned <- Aster_HeightData[,c(8,11)]
+
+
+#merge data frames
+df <- full_join(pheno_cleaned, height_cleaned, by = "Seed_ID")
+df$`Height(cm)` <- as.numeric(df$`Height(cm)`)
+
+#set entries where no seed emerged to have a time to emergence of 0
+df$Time_to_Emergence[df$Time_to_Emergence < 0] <- 0
+
+#remove individuals that have a height but do not have any emergence data
+df <- df[!( (df$Time_to_Emergence == 0 | is.na(df$Time_to_Emergence)) &
+             !is.na(df$`Height(cm)`) ), ]
+
+#make a column for if the seed emerged or not
+df$emerge01 <- ifelse(df$Time_to_Emergence <= 0 | is.na(df$Time_to_Emergence), 0,1)
+df$Time_to_Emergence[is.na(df$Time_to_Emergence)] <- 0
+
+
+#make a column for if the seedling produced true leaves or not
+df$true01 <-  ifelse(df$Time_to_TrueLeaves <= 0 | is.na(df$Time_to_TrueLeaves), 0, 1)
+#replace NA true leaf values with 0
+df$Time_to_TrueLeaves[df$Time_to_TrueLeaves < 0] <- 0
+df$Time_to_TrueLeaves[is.na(df$Time_to_TrueLeaves)] <- 0
+
+
+#make column for if the seedling produced compound leaves or not
+df$comp01 <-  ifelse(df$Time_to_CompoundLeaves <= 0 | is.na(df$Time_to_CompoundLeaves), 0, 1)
+#replace NA compound leaf values with 0
+df$Time_to_CompoundLeaves[df$Time_to_CompoundLeaves < 0] <- 0
+df$Time_to_CompoundLeaves[is.na(df$Time_to_CompoundLeaves)] <- 0
+
+#make a mortality column based on height data
+df$mort01 <- ifelse(df$`Height(cm)` == 0 | is.na(df$`Height(cm)`), 0,1)
+#make height measurements that are NA equal to 0
+df$`Height(cm)`[is.na(df$`Height(cm)`)] <- 0
+
+#remove twins
+df <- df[grepl("^[0-9]+(\\.[0-9]+)?$", df$`Height(cm)`), ]
+
+#remove the Seed_ID column
+df <- df[,c(1,3:16)]
+
+write.csv(df, file = "AsterFullDataset_Fall2025.csv")
+```
+
+#Put data in Aster format
+```{r}
+AsterTestData_Cleaned <- read_csv("AsterFullDataset_Fall2025.csv")
+df <- AsterTestData_Cleaned[,-1]
+sapply(df, class)
+colnames(df)[colnames(df) == "Time_to_Emergence"] <- "emerge02"
+colnames(df)[colnames(df) == "Time_to_TrueLeaves"] <- "true02"
+colnames(df)[colnames(df) == "Time_to_CompoundLeaves"] <- "comp02"
+colnames(df)[colnames(df) == "Height(cm)"] <- "height01"
+
+df$Individual <- as.factor(df$Individual)
+df$Provenance <- as.factor(df$Provenance)
+df$Year_Collected <- as.factor(df$Year_Collected)
+df$Table <- as.factor(df$Table)
+df$Latitude <- as.integer(df$Latitude)
+df$Longitude <- as.integer(df$Longitude)
+df$Elevation <- as.integer(df$Elevation)
+df$emerge01 <- as.integer(df$emerge01)
+df$emerge02 <- as.integer(df$emerge02)
+df$true01 <- as.integer(df$true01)
+df$true02 <- as.integer(df$true02)
+df$comp01 <- as.integer(df$comp01)
+df$comp02 <- as.integer(df$comp02)
+df$mort01 <- as.integer(df$mort01)
+
+sapply(df, class)
+
+#remove individuals that have true leaves or compound leaves but no emergence data
+df <- df[!(df$emerge01 == 0 & df$true01 == 1), ]
+df <- df[!(df$emerge01 == 0 & df$comp01 == 1), ]
+```
+
+```{r}
+#transform the data to long format
+vars <- c("emerge01", "emerge02", "true01", "true02", 
+          "comp01", "comp02", "mort01", "height01")
+
+df <- as.data.frame(df)
+
+redata <- reshape(df, varying = list(vars), direction = "long",timevar = "varb", times = as.factor(vars), v.names = "resp")
+
+```
+
+##add the root node, assign family distributions to each node, and assign predicessors
+```{r}
+library(aster)
+
+redata <- data.frame(redata, root = 1)
+names(redata)
+famlist <- list(
+  fam.bernoulli(),
+  fam.truncated.poisson(0),
+  fam.normal.location(sd =1)
+)
+
+fam <- c(1, 2, 1, 2, 1, 2, 1, 3)
+
+pred <- c(0,1,1,3,3,5,1,7)
+
+sapply(famlist, as.character)[fam]
+
+fit <- grep("height01", as.character(redata$varb))
+fit <- is.element(seq(along = redata$varb), fit)
+redata <- data.frame(redata, fit = as.integer(fit))
+names(redata)
+
+```
+
+#build aster model
+Reaster models take a vary long time to run, so make sure you save the output as an R object
+```{r}
+aout3 <- reaster(resp ~ varb + fit:(Provenance + Seed_Weight+emerge02+true02+true01+comp02+comp01), list(fam = ~ 0 + fit:Individual),  pred, fam, varb, id, root, famlist=famlist, data=redata)
+summary(aout3, show.graph = T)
+saveRDS(aout3, file = "FullAsterModel.R")
+```
+
+#predict fitness from aster model
+Code adapted from Kulbaba et al 2019
+```{r}
+#extract the main aster object from the model
+aout <- aout3$obj
+#number of nodes and individuals in the data
+nnode <- ncol(aout$x)
+nind <- nrow(aout$x)
+#extract fixed and random effects
+fixed <- aout3$fixed
+random <- aout3$random
+#get column names of all random effects
+randlab <- unlist(lapply(aout3$random, colnames))
+#identify which random effects are associated with individual (family)
+include.random <- grepl("Individual", randlab, fixed = TRUE)
+#create a copy of the output for manilupation
+fake.out <- aout
+#combined fixed and random effects into a single vector
+fake.beta <- with(aout3, c(alpha, b[include.random]))
+#combine all random effects into a single matrix
+modmat.random <- Reduce(cbind, random)
+#sanity check, ensure the number of column mathces the length of random coefficients
+stopifnot(ncol(modmat.random) == length(aout3$b))
+#Keep only columns corresponding to individuals, never forget drop = FALSE in programming R
+modmat.random <- modmat.random[ , include.random, drop = FALSE]
+#combined fixed effect matrix with filtered random effects matrix
+fake.modmat <- cbind(fixed, modmat.random)
+
+
+# now have to deal with objects of class aster (as opposed to reaster)
+#ensure model amtrices are compatible with Aster's expected 3-way array structure
+stopifnot(prod(dim(aout$modmat)[1:2]) == nrow(fake.modmat))
+fake.modmat <- array(as.vector(fake.modmat),dim = c(dim(aout$modmat)[1:2], ncol(fake.modmat)))
+
+#replace modmat with our constructed model matrix
+fake.out$modmat <- fake.modmat
+
+#total number of parameters
+nparm <- length(aout3$alpha) + length(aout3$b) + length(aout3$nu)
+
+#identify indices for fixed (alpha), random (b), and other parameters (nu)
+is.alpha <- 1:nparm %in% seq_along(aout3$alpha)
+is.bee <- 1:nparm %in% (length(aout3$alpha) + seq_along(aout3$b))
+is.nu <- (! (is.alpha | is.bee))
+
+# Extract the family matrix from random effects
+m <- aout3$random$fam
+View(m)
+
+# Get the column names of the family matrix (individual identifiers)
+individuals <- colnames(m)
+idx <- match(individuals, colnames(m))
+
+# Remove "fit:Individual" prefix to get family codes
+fams <- colnames(m)[idx] |> sub("^fit:Individual", "", x = _)
+
+# Subset the family matrix to the relevant individuals
+m.fams <- m[, individuals, drop = F]
+
+# Reshape to 3D array (individuals x nodes x families)
+m.fams <- array(m.fams, c(nind, nnode, ncol(m.fams)))
+
+# Keep only the last node for each individual
+m.fams <- m.fams[, nnode,]
+
+# Sanity checks: family matrix should contain only 0/1 indicators and exactly one per individual
+stopifnot(as.vector(m.fams) %in% c(0, 1))
+stopifnot(rowSums(m.fams) == 1)
+
+# Convert individual names to integer codes
+ind.codes <- as.integer(factor(individuals))
+
+# Multiply family indicator matrix by individual codes to get family assignment
+fams <- drop(m.fams %*% ind.codes)
+
+# Unique family codes and index of first occurrence
+sufams <- sort(unique(fams))
+which.ind <- match(sufams, fams)
+
+# Combine all parameters into a single vector
+alphabeenu <- with(aout3, c(alpha, b, nu))
+
+# Sanity checks on combined parameters
+stopifnot(is.numeric(alphabeenu))
+stopifnot(is.finite(alphabeenu))
+stopifnot(length(alphabeenu) == nparm)
+
+# Separate alpha, b, and nu parameters
+alpha <- alphabeenu[is.alpha]
+bee <- alphabeenu[is.bee]
+nu <- alphabeenu[is.nu]
+
+# Recreate fake.beta (for prediction) including only relevant random effects
+fake.beta <- c(alpha, bee[include.random])
+fake.out$coefficients <- fake.beta
+
+# Make conditional predictions using the aster model
+pout <- predict(fake.out, model.type = "conditional", is.always.parameter = TRUE)
+
+# Convert predictions to a matrix with columns = nodes
+xi <- matrix(pout, ncol = nnode)
+
+# Compute overall expected fitness per individual (product across nodes)
+mu <- apply(xi, 1, prod)
+
+# Convert predictions to a data frame for convenience
+xi <- as.data.frame(xi)
+
+# Combine fitness values with family codes
+familyfitness <- cbind(mu, fams)
+colnames(familyfitness)[2] <- "Family_Code"
+
+# Create a mapping of individual -> family
+ind.factor <- factor(individuals)
+familyfitness <- as.data.frame(familyfitness)
+ind.codes <- as.integer(ind.factor)
+fam_labels <- levels(ind.factor)
+fam_key <- data.frame(Individual = individuals, Family_Code = ind.codes, Family_Label = fam_labels[ind.codes])
+
+# Join family labels with fitness data
+familyfitness <- left_join(familyfitness, fam_key, by = "Family_Code")
+
+# Extract family names from factor labels
+familyfitness$Family <- substr(familyfitness$Family_Label, 15,35)
+familyfitness$Family <- as.factor(familyfitness$Family)
+
+# Compute mean fitness per family
+fam_means <- aggregate(mu ~ Family, data = familyfitness, FUN = mean)
+
+# Extract provenance from family name
+fam_means$Prov <- as.factor(substr(fam_means$Family, 11,13))
+
+# Combine node-level predictions with family codes
+famfitcomp <- cbind(xi, fams)
+colnames(famfitcomp) <- c("Survival", "Height" ,"Family_Code")
+famfitcomp <- as.data.frame(famfitcomp)
+
+# Join family labels
+famfitcomp <- left_join(famfitcomp, fam_key, by = "Family_Code")
+famfitcomp$Family <- substr(famfitcomp$Family_Label, 15,35)
+famfitcomp$Family <- as.factor(famfitcomp$Family)
+
+# Compute mean Survival and Height per family
+mort_means <- aggregate(Survival ~ Family, data = famfitcomp, FUN = mean)
+height_means <- aggregate(Height ~ Family, data = famfitcomp, FUN = mean)
+
+# Merge survival and height summaries
+famfitcomp_means <- left_join(mort_means, height_means, by = "Family")
+
+# Merge in overall family fitness (mu) values
+famfitcomp_means <- left_join(famfitcomp_means, fam_means, by = "Family")
+
+# Clean up redundant column and rename
+famfitcomp_means <- famfitcomp_means[,-6]
+colnames(famfitcomp_means)[4] <- "Prov"
+write.csv(famfitcomp_means, file = "AsterPredictedFitness.csv")
+```
+
+#Linear regressions
+```{r}
+#load in data
+AsterPredictedFitness <- read_csv("~/GitHub/Ash/FRANIG_Seed/Aster/AsterPredictedFitness.csv")
+
+#calculate average fitness values per provenance
+mean_survival <- aggregate(Survival ~ Prov, data = AsterPredictedFitness, FUN = mean)
+mean_height <- aggregate(Height ~ Prov, data = AsterPredictedFitness, FUN = mean)
+mean_mu <- aggregate(mu ~ Prov, data = AsterPredictedFitness, FUN = mean)
+df_list <- list(mean_survival, mean_height, mean_mu)
+fitness_populationmeans <- reduce(df_list, full_join, by = "Prov")
+
+#load climate data
+FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y <- read_csv("~/GitHub/Ash/FRANIG_Seed/FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y.csv")
+
+colnames(FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y)[colnames(FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y) == "id2"] <- "Prov"
+fitness_df <- left_join(fitness_populationmeans, FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y, by = "Prov")
+
+
+#merge fitness and climate data
+fitness_df <- left_join(fitness_populationmeans, FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y, by = "Prov")
+
+```
+
+
+```{r}
+#cumulative fitness
+library(gridExtra)
+y_var <- "mu"
+x_vars <- c("TD", "CMD", "DD5", "MAT","MSP","MAP","RH")
+
+model_list <- list()
+plot_list <- list()
+
+for (x_var in x_vars) {
+  
+  # Fit the linear model
+  formula <- as.formula(paste(y_var, "~", x_var))  # Create formula dynamically
+  model <- lm(formula, data = fitness_df)
+  
+  model_list[[x_var]] <- model
+  
+  # Extract R² and p-value
+  r2 <- summary(model)$r.squared
+  p_value <- summary(model)$coefficients[2, 4]
+  
+   # Determine top-right position dynamically
+  x_pos <- max(fitness_df[[x_var]], na.rm = TRUE) * 0.9  # Slightly left from max x
+  y_pos <- max(fitness_df[[y_var]], na.rm = TRUE) * 0.9  # Slightly below max y
+  
+  # Generate ggplot
+  p <- ggplot(fitness_df, aes_string(x = x_var, y = y_var)) +  # Use aes_string() for dynamic mapping
+    geom_point() + 
+    geom_smooth(method = "lm", se = T, color = "blue") +
+    annotate("text", x = x_pos, y = y_pos,
+             label = paste0("R² = ", round(r2, 3), "\nP = ", signif(p_value, 3)),
+             size = 3, color = "black") + theme(panel.background = element_blank(), panel.grid.major =    element_line("grey")) +
+    ggtitle(paste("mu", "vs", x_var)) + ylab("mu")
+  
+  # Print each plot
+  plot_list[[x_var]] <- p
+}
+model_summary <- map_dfr(
+  model_list,
+  ~{
+    sm <- summary(.x)
+    coefs <- sm$coefficients
+    
+    tibble(
+      R_squared = sm$r.squared,
+      Estimate  = coefs[2, "Estimate"],
+      Std_Error = coefs[2, "Std. Error"],
+      P_value   = coefs[2, "Pr(>|t|)"]
+    )
+  },
+  .id = "Predictor"
+)
+write.csv(model_summary, file = "aster_Climate_Mu_Stats_perPop.csv")
+
+plots_combined <- marrangeGrob(grobs = plot_list, ncol = 2, nrow = 3)
+
+ggsave("AsterRegressions_mu_perPop.pdf", plots_combined, width = 10, height = 7)
+
+
+# Create a list to store diagnostic plots
+diagnostic_plots <- list()
+
+# Loop through each model in model_list
+for (x_var in names(model_list)) {
+  
+  model <- model_list[[x_var]]
+  resid <- residuals(model)
+  fitted <- fitted(model)
+  
+  # --- QQ Plot of residuals ---
+  qq_data <- data.frame(
+    Theoretical = qqnorm(resid, plot.it = FALSE)$x,
+    Sample = qqnorm(resid, plot.it = FALSE)$y
+  )
+  
+  # Compute slope and intercept for qqline (like base R qqline)
+  q_theoretical <- quantile(qq_data$Theoretical, probs = c(0.25, 0.75))
+  q_sample <- quantile(qq_data$Sample, probs = c(0.25, 0.75))
+  slope <- diff(q_sample) / diff(q_theoretical)
+  intercept <- q_sample[1] - slope * q_theoretical[1]
+  
+  # --- QQ Plot with QQ Line ---
+  qq_plot <- ggplot(qq_data, aes(x = Theoretical, y = Sample)) +
+    geom_point() +
+    geom_abline(slope = slope, intercept = intercept, color = "red", linetype = "dashed", linewidth = 0.8) +
+    ggtitle(paste("QQ Plot of Residuals for", x_var)) +
+    theme_bw()
+  
+  # --- Residuals vs Fitted Plot ---
+  resid_plot <- ggplot(data.frame(Fitted = fitted, Residuals = resid),
+                       aes(x = Fitted, y = Residuals)) +
+    geom_point() +
+    geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+    ggtitle(paste("Residuals vs Fitted for", x_var)) +
+    xlab("Fitted Values") +
+    ylab("Residuals") +
+    theme_bw()
+  
+  # Combine both plots vertically
+  combined_plot <- gridExtra::grid.arrange(qq_plot, resid_plot, ncol = 1)
+  
+  diagnostic_plots[[x_var]] <- combined_plot
+}
+
+# Save all diagnostic plots to a single PDF
+
+plots_combined <- marrangeGrob(grobs = diagnostic_plots, ncol = 2, nrow = 2)
+
+ggsave("AsterRegressions_Mu_diagnostic_perPop.pdf", plots_combined, width = 10, height = 7)
+
+
+#height
+y_var <- "Height"
+x_vars <- c("TD", "CMD", "DD5", "MAT","MSP","MAP","RH")
+
+model_list <- list()
+plot_list <- list()
+
+for (x_var in x_vars) {
+  
+  # Fit the linear model
+  formula <- as.formula(paste(y_var, "~", x_var))  # Create formula dynamically
+  model <- lm(formula, data = fitness_df)
+  
+  model_list[[x_var]] <- model
+  
+  # Extract R² and p-value
+  r2 <- summary(model)$r.squared
+  p_value <- summary(model)$coefficients[2, 4]
+  
+   # Determine top-right position dynamically
+  x_pos <- max(fitness_df[[x_var]], na.rm = TRUE) * 0.9  # Slightly left from max x
+  y_pos <- max(fitness_df[[y_var]], na.rm = TRUE) * 0.9  # Slightly below max y
+  
+  # Generate ggplot
+  p <- ggplot(fitness_df, aes_string(x = x_var, y = y_var)) +  # Use aes_string() for dynamic mapping
+    geom_point() + 
+    geom_smooth(method = "lm", se = T, color = "blue") +
+    annotate("text", x = x_pos, y = y_pos,
+             label = paste0("R² = ", round(r2, 3), "\nP = ", signif(p_value, 3)),
+             size = 3, color = "black") + theme(panel.background = element_blank(), panel.grid.major =    element_line("grey")) +
+    ggtitle(paste("Height", "vs", x_var)) + ylab("Height")
+  
+  # Print each plot
+  plot_list[[x_var]] <- p
+}
+
+model_summary <- map_dfr(
+  model_list,
+  ~{
+    sm <- summary(.x)
+    coefs <- sm$coefficients
+    
+    tibble(
+      R_squared = sm$r.squared,
+      Estimate  = coefs[2, "Estimate"],
+      Std_Error = coefs[2, "Std. Error"],
+      P_value   = coefs[2, "Pr(>|t|)"]
+    )
+  },
+  .id = "Predictor"
+)
+write.csv(model_summary, file = "aster_Climate_height_Stats_perPop.csv")
+
+plots_combined <- marrangeGrob(grobs = plot_list, ncol = 2, nrow = 3)
+
+ggsave("AsterRegressions_Height_perPop.pdf", plots_combined, width = 10, height = 7)
+
+
+# Create a list to store diagnostic plots
+diagnostic_plots <- list()
+
+# Loop through each model in model_list
+for (x_var in names(model_list)) {
+  
+  model <- model_list[[x_var]]
+  resid <- residuals(model)
+  fitted <- fitted(model)
+  
+  # --- QQ Plot of residuals ---
+  qq_data <- data.frame(
+    Theoretical = qqnorm(resid, plot.it = FALSE)$x,
+    Sample = qqnorm(resid, plot.it = FALSE)$y
+  )
+  
+  # Compute slope and intercept for qqline (like base R qqline)
+  q_theoretical <- quantile(qq_data$Theoretical, probs = c(0.25, 0.75))
+  q_sample <- quantile(qq_data$Sample, probs = c(0.25, 0.75))
+  slope <- diff(q_sample) / diff(q_theoretical)
+  intercept <- q_sample[1] - slope * q_theoretical[1]
+  
+  # --- QQ Plot with QQ Line ---
+  qq_plot <- ggplot(qq_data, aes(x = Theoretical, y = Sample)) +
+    geom_point() +
+    geom_abline(slope = slope, intercept = intercept, color = "red", linetype = "dashed", linewidth = 0.8) +
+    ggtitle(paste("QQ Plot of Residuals for", x_var)) +
+    theme_bw()
+  
+  # --- Residuals vs Fitted Plot ---
+  resid_plot <- ggplot(data.frame(Fitted = fitted, Residuals = resid),
+                       aes(x = Fitted, y = Residuals)) +
+    geom_point() +
+    geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+    ggtitle(paste("Residuals vs Fitted for", x_var)) +
+    xlab("Fitted Values") +
+    ylab("Residuals") +
+    theme_bw()
+  
+  # Combine both plots vertically
+  combined_plot <- gridExtra::grid.arrange(qq_plot, resid_plot, ncol = 1)
+  
+  diagnostic_plots[[x_var]] <- combined_plot
+}
+
+# Save all diagnostic plots to a single PDF
+
+plots_combined <- marrangeGrob(grobs = diagnostic_plots, ncol = 2, nrow = 2)
+
+ggsave("AsterRegressions_Height_diagnostic_perPop.pdf", plots_combined, width = 10, height = 7)
+
+
+#survival
+y_var <- "Survival"
+x_vars <- c("TD", "CMD", "DD5", "MAT","MSP","MAP","RH")
+
+model_list <- list()
+plot_list <- list()
+
+for (x_var in x_vars) {
+  
+  # Fit the linear model
+  formula <- as.formula(paste(y_var, "~", x_var))  # Create formula dynamically
+  model <- lm(formula, data = fitness_df)
+  
+  model_list[[x_var]] <- model
+  
+  # Extract R² and p-value
+  r2 <- summary(model)$r.squared
+  p_value <- summary(model)$coefficients[2, 4]
+  
+   # Determine top-right position dynamically
+  x_pos <- max(fitness_df[[x_var]], na.rm = TRUE) * 0.9  # Slightly left from max x
+  y_pos <- max(fitness_df[[y_var]], na.rm = TRUE) * 0.9  # Slightly below max y
+  
+  # Generate ggplot
+  p <- ggplot(fitness_df, aes_string(x = x_var, y = y_var)) +  # Use aes_string() for dynamic mapping
+    geom_point() + 
+    geom_smooth(method = "lm", se = T, color = "blue") +
+    annotate("text", x = x_pos, y = y_pos,
+             label = paste0("R² = ", round(r2, 3), "\nP = ", signif(p_value, 3)),
+             size = 3, color = "black") + theme(panel.background = element_blank(), panel.grid.major =    element_line("grey")) +
+    ggtitle(paste("Survival", "vs", x_var)) + ylab("Survival")
+  
+  # Print each plot
+  plot_list[[x_var]] <- p
+}
+
+model_summary <- map_dfr(
+  model_list,
+  ~{
+    sm <- summary(.x)
+    coefs <- sm$coefficients
+    
+    tibble(
+      R_squared = sm$r.squared,
+      Estimate  = coefs[2, "Estimate"],
+      Std_Error = coefs[2, "Std. Error"],
+      P_value   = coefs[2, "Pr(>|t|)"]
+    )
+  },
+  .id = "Predictor"
+)
+write.csv(model_summary, file = "aster_Climate_survival_Stats_perPop.csv")
+
+plots_combined <- marrangeGrob(grobs = plot_list, ncol = 2, nrow = 3)
+
+ggsave("AsterRegressions_Survival_perPop.pdf", plots_combined, width = 10, height = 7)
+
+
+# Create a list to store diagnostic plots
+diagnostic_plots <- list()
+
+# Loop through each model in model_list
+for (x_var in names(model_list)) {
+  
+  model <- model_list[[x_var]]
+  resid <- residuals(model)
+  fitted <- fitted(model)
+  
+  # --- QQ Plot of residuals ---
+  qq_data <- data.frame(
+    Theoretical = qqnorm(resid, plot.it = FALSE)$x,
+    Sample = qqnorm(resid, plot.it = FALSE)$y
+  )
+  
+  # Compute slope and intercept for qqline (like base R qqline)
+  q_theoretical <- quantile(qq_data$Theoretical, probs = c(0.25, 0.75))
+  q_sample <- quantile(qq_data$Sample, probs = c(0.25, 0.75))
+  slope <- diff(q_sample) / diff(q_theoretical)
+  intercept <- q_sample[1] - slope * q_theoretical[1]
+  
+  # --- QQ Plot with QQ Line ---
+  qq_plot <- ggplot(qq_data, aes(x = Theoretical, y = Sample)) +
+    geom_point() +
+    geom_abline(slope = slope, intercept = intercept, color = "red", linetype = "dashed", linewidth = 0.8) +
+    ggtitle(paste("QQ Plot of Residuals for", x_var)) +
+    theme_bw()
+  
+  # --- Residuals vs Fitted Plot ---
+  resid_plot <- ggplot(data.frame(Fitted = fitted, Residuals = resid),
+                       aes(x = Fitted, y = Residuals)) +
+    geom_point() +
+    geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+    ggtitle(paste("Residuals vs Fitted for", x_var)) +
+    xlab("Fitted Values") +
+    ylab("Residuals") +
+    theme_bw()
+  
+  # Combine both plots vertically
+  combined_plot <- gridExtra::grid.arrange(qq_plot, resid_plot, ncol = 1)
+  
+  diagnostic_plots[[x_var]] <- combined_plot
+}
+
+# Save all diagnostic plots to a single PDF
+
+plots_combined <- marrangeGrob(grobs = diagnostic_plots, ncol = 2, nrow = 2)
+
+ggsave("AsterRegressions_Survival_diagnostic_perPop.pdf", plots_combined, width = 10, height = 7)
+```
+
+#plotting
+```{r}
+library(cowplot)
+a <- ggplot(fitness_df, aes(x = TD, y = mu)) +
+  geom_point()+theme(panel.background = element_blank(), panel.grid.major =    element_line("grey"), panel.border = element_rect(color = "black", fill = NA)) +
+     theme(axis.text.x = element_text(angle = 0, hjust = 1)) +
+    labs(y = "Mean predicted fitness (mu)", x = "Continentality (C)") + geom_smooth(method = "lm", se = T)
+b <- ggplot(fitness_df, aes(x = TD, y = Height)) +
+  geom_point()+theme(panel.background = element_blank(), panel.grid.major =    element_line("grey"), panel.border = element_rect(color = "black", fill = NA)) +
+     theme(axis.text.x = element_text(angle = 0, hjust = 1)) +
+    labs(y = "Mean predicted Height", x = "Continentality (C)")+ geom_smooth(method = "lm", se = T)
+c <- ggplot(fitness_df, aes(x = TD, y = Survival)) +
+  geom_point()+theme(panel.background = element_blank(), panel.grid.major =    element_line("grey"), panel.border = element_rect(color = "black", fill = NA)) +
+     theme(axis.text.x = element_text(angle = 0, hjust = 1)) +
+    labs(y = "Mean predicted survival", x = "Continentality (C)")+ geom_smooth(method = "lm", se = T) 
+
+plot <- plot_grid(c,b,a, labels = c("A","B","C"), ncol = 3, nrow = 2, align = "h")
+
+modelA <- lm(mu~DD5, data = fitness_df)
+summary(modelA)
+modelB <- lm(Height~DD5, data = fitness_df)
+summary(modelB)
+modelC <- lm(Survival~DD5, data = fitness_df)
+summary(modelC)
+modelD <- lm(mu~TD, data = fitness_df)
+summary(modelD)
+modelE <- lm(Height~TD, data = fitness_df)
+summary(modelE)
+modelF <- lm(Survival~TD, data = fitness_df)
+summary(modelF)
+
+```

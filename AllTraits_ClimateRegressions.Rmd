@@ -1,0 +1,193 @@
+---
+title: "FRANIG Seed Morphology - Climate-Trait Linear Regressions"
+author: "KyraL"
+date: "2026-01-07"
+output: html_document
+---
+
+#Introduction
+Code used to calculate population means for each seed and greenhouse trait and perform linear regressions between historic population climate and trait mean values.
+
+
+#Read in Data
+```{r}
+library(tidyverse)
+#load in seed trait data and climate normals
+FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y <- read_csv("~/GitHub/Ash/FRANIG_Seed/FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y.csv")
+
+colnames(FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y)[colnames(FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y) == "id2"] <- "Prov"
+
+
+#aggregate provenance means for each trait
+
+df_seedmorph <- read_csv("~/GitHub/Ash/FRANIG_Seed/df.seedmorph.csv")
+df_seedmorph$`100_Seed_Weight_mg` <- as.numeric(df_seedmorph$`100_Seed_Weight_mg`)
+colnames(df_seedmorph)[colnames(df_seedmorph) == "Provenance...11"] <- "Prov"
+
+mean_SamA <- aggregate(Samara_Area_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SamW <- aggregate(Samara_Width_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SamL <- aggregate(Samara_Length_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SeeA <- aggregate(Seed_Area_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SeeW <- aggregate(Seed_Width_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SeeL <- aggregate(Seed_Length_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SeeSamA <- aggregate(Seed_Samara_AreaRatio ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SamWL <- aggregate(Samara_WidthLengthRatio ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SW <- aggregate(`100_Seed_Weight_mg` ~ Prov, data = df_seedmorph, FUN = mean)
+df_list <- list(mean_SamA, mean_SamL, mean_SamW, mean_SeeA, mean_SeeL, mean_SeeW, mean_SeeSamA, mean_SamWL, mean_SW)
+
+#join mean traits into one dataframe
+morphological_trait_populationmeans <- reduce(df_list, full_join, by = "Prov")
+
+#merge seed data with climate data
+climate_morphology_merged <- left_join(morphological_trait_populationmeans, FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y, by = "Prov")
+climate_morphology_merged <- climate_morphology_merged[!is.na(climate_morphology_merged$Latitude),]
+
+#load greenhouse data
+FRANIG_HC_MORPH_COMPLETE <- read_csv("~/GitHub/Ash/FRANIG_Seed/FRANIG_HC_MORPH_COMPLETE.csv")
+greenhouse_traits <- FRANIG_HC_MORPH_COMPLETE[,c(3,7,9:12,20)]
+colnames(greenhouse_traits)[colnames(greenhouse_traits) == "id2"] <- "Prov"
+
+#calculate population means
+mean_propemerged <- aggregate(Proportion_Emerged ~ Prov, data = greenhouse_traits, FUN = mean)
+mean_height <- aggregate(Height_cm ~ Prov, data = greenhouse_traits, FUN = mean)
+mean_emergencetime <- aggregate(Time_to_Emergence ~ Prov, data = greenhouse_traits, FUN = mean)
+mean_trueleaftime<- aggregate(Time_to_TrueLeaves ~ Prov, data = greenhouse_traits, FUN = mean)
+mean_compoundleaftime <- aggregate(Time_to_CompoundLeaves ~ Prov, data = greenhouse_traits, FUN = mean)
+df_list <- list(mean_propemerged, mean_height, mean_emergencetime, mean_trueleaftime, mean_compoundleaftime)
+greenhouse_trait_populationmeans <- reduce(df_list, full_join, by = "Prov")
+
+#merge seed data, greenhouse data, and climate and tidy column names
+climate_morphology_merged <- left_join(climate_morphology_merged, greenhouse_trait_populationmeans, by = "Prov")
+
+colnames(climate_morphology_merged) <- c("Prov", "Wing_Area","Wing_Length","Wing_Width","Seed_Area", "Seed_Length","Seed_Width","Seed_to_Wing_AreaRatio","Wing_Length_to_WidthRatio","Seed_Weight",
+"id1", "Latitude", "Longitude","Elevation", "MAT", "MWMT", "MCMT" ,"TD", "MAP", "MSP", "AHM" ,"SHM" , "DD_0", "DD5" ,"DD_18" ,"DD18", "NFFD",  "bFFP","eFFP" , "FFP", "PAS" , "EMT",  "EXT"  ,"MAR" ,"Eref" , "CMD", "RH", "CMI" ,"DD1040", "Proportion_Emerged", "Height_cm" ,"Time_to_Emergence" ,"Time_to_TrueLeaves", "Time_to_CompoundLeaves")
+
+```
+
+#linear regressions
+```{r}
+library(tidyverse)
+library(broom)
+library(ggplot2)
+
+y_vars <- c("Wing_Area","Wing_Length","Wing_Width","Seed_Area", "Seed_Length","Seed_Width","Seed_to_Wing_AreaRatio","Wing_Length_to_WidthRatio","Seed_Weight","Proportion_Emerged","Height_cm","Time_to_Emergence","Time_to_TrueLeaves","Time_to_CompoundLeaves")
+x_vars <- c("DD5", "MAT", "MAP", "RH", "TD","CMD","MSP")
+
+df <- climate_morphology_merged
+
+model_results <- expand_grid(y = y_vars, x = x_vars) %>%
+  mutate(
+    model = map2(y, x, ~ lm(
+      as.formula(paste0("`", .x, "` ~ `", .y, "`")),
+      data = df
+    )),
+    
+    tidy   = map(model, broom::tidy),
+    glance = map(model, broom::glance)
+  )
+
+library(tidyverse)
+library(broom)
+
+#compare raw to standardized slope estimates
+results_df <- expand_grid(
+  y = y_vars,
+  x = x_vars
+) %>%
+  mutate(
+    ## --- raw model ---
+    raw_model = map2(y, x, ~ lm(
+      as.formula(paste0("`", .x, "` ~ `", .y, "`")),
+      data = df
+    )),
+    
+    ## --- standardized model ---
+    std_model = map2(y, x, ~ lm(
+      as.formula(
+        paste0("scale(`", .x, "`) ~ scale(`", .y, "`)")
+      ),
+      data = df
+    )),
+    
+    raw_tidy = map(raw_model, tidy),
+    std_tidy = map(std_model, tidy),
+    glance   = map(raw_model, glance)
+  )
+results_df <- results_df %>%
+  transmute(
+    y,
+    x,
+    
+    ## raw estimates
+    raw = map(raw_tidy, ~ filter(.x, term != "(Intercept)")),
+    
+    ## standardized estimates
+    std = map(std_tidy, ~ filter(.x, term != "(Intercept)")),
+    
+    glance
+  ) %>%
+  unnest(c(raw, std), names_sep = "_") %>%
+  unnest(glance, names_sep = "_") %>%
+  rename(
+    estimate_raw = raw_estimate,
+    se_raw       = raw_std.error,
+    t_raw        = raw_statistic,
+    p_value      = raw_p.value,
+    
+    estimate_std = std_estimate,
+    se_std       = std_std.error,
+    t_std        = std_statistic,
+    
+    r2 = glance_r.squared
+  )
+
+results_df <- results_df %>%
+  mutate(
+    p_fdr = p.adjust(p_value, method = "fdr"),
+    
+    sig = case_when(
+      p_value < 0.001 ~ "***",
+      p_value < 0.01  ~ "**",
+      p_value < 0.05  ~ "*",
+      TRUE          ~ ""
+    )
+  )
+```
+
+#Plotting
+```{r}
+library(pheatmap)
+library(tidyverse)
+
+# Create matrix of standardized estimates
+heatmat <- results_df %>%
+  select(y, x, estimate_std) %>%
+  pivot_wider(names_from = x, values_from = estimate_std) %>%
+  column_to_rownames(var = "y") %>%
+  as.matrix()
+
+# Create matrix of significance stars
+sigmat <- results_df %>%
+  select(y, x, sig) %>%
+  pivot_wider(names_from = x, values_from = sig) %>%
+  column_to_rownames(var = "y") %>%
+  as.matrix()
+
+# Clustered heatmap with white significance stars
+pheatmap(
+  heatmat,
+  color = colorRampPalette(c("blue", "grey80", "red"))(100),
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  display_numbers = sigmat,
+  number_color = "white",        # <-- make stars white
+  fontsize_number = 10,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  angle_col = 45,
+  border_color = "white",
+  main = "Clustered Heatmap of Standardized Regression Estimates"
+)
+
+
+```

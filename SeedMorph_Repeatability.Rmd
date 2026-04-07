@@ -1,0 +1,664 @@
+---
+title: "FRANIG Seed Morphology - Repeatability Estimates"
+output: html_notebook
+---
+#Introduction
+This portion of code was used to calculate repeatability estimates for each seed morphology trait for each population. The first part of the code was used to test how estimates of typical narrow sense heritability differed from repeatbility. The remainder of the code is calculating repeatability and performing bootstrapping.
+
+#Read in data
+```{r}
+library(readxl)
+library(tidyverse)
+
+#read in seed morphology data
+FRANIG_SeedMorphology_AllTraits <- read_csv("~/GitHub/Ash/FRANIG_Seed/FRANIG_SeedMorphology_AllTraits.csv")
+df <- FRANIG_SeedMorphology_AllTraits[,c(3:9,11,16:21)]
+colnames(df) <- c("Family", "Wing_Area", "Wing_Length", "Wing_Width", "Seed_Area","Seed_Length", "Seed_Width", "Provenance", "Latitude", "Longitude", "Elevation", "Year_collected", "SeedtoWing_Area", "Wing_LengthtoWidth")
+df$Provenance <- as.factor(df$Provenance)
+df$Family <- as.factor(df$Family)
+df$Wing_Area <- as.numeric(df$Wing_Area)
+
+#look at distribution of raw data
+hist(df$Wing_Area)
+hist(df$Wing_Width)
+hist(df$Wing_Length)
+hist(df$Seed_Area)
+hist(df$Seed_Length)
+hist(df$Seed_Width)
+hist(df$SeedtoWing_Area)
+hist(df$Wing_LengthtoWidth)
+
+```
+
+#Calculating Repeatability, CIs and SEs
+For each trait, observed repeatability was calculated for each provenance and averaged across provenances to get a mean repeatability per trait. Then, a population level bootstrap with resampling was performed for each trait to get estimates of uncertainty for repeatability estimates.
+```{r}
+library(lme4)
+library(parallel)
+
+#wing area
+# Function to compute ICC (H2) for each provenance
+get_H2 <- function(df) {
+  sapply(levels(df$Provenance), function(p) {
+    dsub <- subset(df, Provenance == p)
+    # catch cases with too few families
+    if(length(unique(dsub$Family)) < 2) return(NA)
+    m <- try(lmer(Wing_Area ~ (1|Family), data = dsub), silent = TRUE)
+    if(inherits(m, "try-error")) return(NA)
+    vars <- as.data.frame(VarCorr(m))
+    fam_var <- vars[vars$grp == "Family", "vcov"]
+    res_var <- vars[vars$grp == "Residual", "vcov"]
+    H2 <- (fam_var) / (fam_var + res_var)
+    return(H2)
+  })
+}
+
+# 1. Observed average ICC
+obs_WAH2 <- get_H2(df)
+obs_WAmean <- mean(obs_WAH2, na.rm = TRUE)
+
+# 2. Parallel stratified bootstrap
+set.seed(123)
+nboot <- 1000
+ncores <- detectCores() - 1
+cl <- makeCluster(ncores)
+
+clusterExport(cl, varlist = c("df", "get_H2"), envir = environment())
+clusterEvalQ(cl, library(lme4))
+
+boot_WAmeans <- parLapply(cl, 1:nboot, function(i) {
+  # --- resample families within each provenance ---
+  df_boot <- do.call(rbind, lapply(split(df, df$Provenance), function(dsub) {
+    fams <- unique(dsub$Family)                                 # list of families
+    sampled_fams <- sample(fams, length(fams), replace = TRUE)  # resample families with replacement
+    do.call(rbind, lapply(sampled_fams, function(f) {
+      dsub[dsub$Family == f, ]                                  # include all individuals from each sampled family
+    }))
+  }))
+  
+  # --- compute h2 per provenance for the bootstrap sample ---
+  H2_boot <- get_H2(df_boot)
+  
+  # --- average across provenances ---
+  mean(H2_boot, na.rm = TRUE)
+})
+
+boot_WAmeans <- unlist(boot_WAmeans)
+
+# 3. CI
+WAci <- quantile(boot_WAmeans, probs = c(0.025, 0.975), na.rm = TRUE)
+
+list(
+  observed_mean = obs_WAmean,
+  bootstrap_se = sd(boot_WAmeans, na.rm = TRUE),
+  ci_95 = WAci
+)
+
+# 4. Plot bootstrap distribution
+boot_WAdf <- data.frame(mean_H2 = boot_WAmeans)
+
+pWA <- ggplot(boot_WAdf, aes(x = mean_H2)) +
+  geom_histogram(bins = 40, fill = "skyblue", color = "white", alpha = 0.7) +
+  geom_vline(xintercept = obs_WAmean, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = WAci, color = "darkblue", linetype = "dotted", size = 1) +
+  labs(
+    title = "Bootstrap distribution of mean wing area ICC (H²)",
+    x = "Mean ICC (bootstrap samples)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+print(pWA)
+
+#Wing length
+# Function to compute ICC (H2) for each provenance
+get_H2 <- function(df) {
+  sapply(levels(df$Provenance), function(p) {
+    dsub <- subset(df, Provenance == p)
+    # catch cases with too few families
+    if(length(unique(dsub$Family)) < 2) return(NA)
+    m <- try(lmer(Wing_Length ~ (1|Family), data = dsub), silent = TRUE)
+    if(inherits(m, "try-error")) return(NA)
+    vars <- as.data.frame(VarCorr(m))
+    fam_var <- vars[vars$grp == "Family", "vcov"]
+    res_var <- vars[vars$grp == "Residual", "vcov"]
+    H2 <- (fam_var) / (fam_var + res_var)
+    return(H2)
+  })
+}
+
+# 1. Observed average ICC
+obs_WLH2 <- get_H2(df)
+obs_WLmean <- mean(obs_WLH2, na.rm = TRUE)
+
+# 2. Parallel stratified bootstrap
+set.seed(123)
+nboot <- 1000
+ncores <- detectCores() - 1
+cl <- makeCluster(ncores)
+
+clusterExport(cl, varlist = c("df", "get_H2"), envir = environment())
+clusterEvalQ(cl, library(lme4))
+
+boot_WLmeans <- parLapply(cl, 1:nboot, function(i) {
+  # --- resample families within each provenance ---
+  df_boot <- do.call(rbind, lapply(split(df, df$Provenance), function(dsub) {
+    fams <- unique(dsub$Family)                                 # list of families
+    sampled_fams <- sample(fams, length(fams), replace = TRUE)  # resample families with replacement
+    do.call(rbind, lapply(sampled_fams, function(f) {
+      dsub[dsub$Family == f, ]                                  # include all individuals from each sampled family
+    }))
+  }))
+  
+  # --- compute h2 per provenance for the bootstrap sample ---
+  H2_boot <- get_H2(df_boot)
+  
+  # --- average across provenances ---
+  mean(H2_boot, na.rm = TRUE)
+})
+
+boot_WLmeans <- unlist(boot_WLmeans)
+
+# 3. CI
+WLci <- quantile(boot_WLmeans, probs = c(0.025, 0.975), na.rm = TRUE)
+
+list(
+  observed_mean = obs_WLmean,
+  bootstrap_se = sd(boot_WLmeans, na.rm = TRUE),
+  ci_95 = WLci
+)
+
+# 4. Plot bootstrap distribution
+boot_WLdf <- data.frame(mean_H2 = boot_WLmeans)
+
+pWL <- ggplot(boot_WLdf, aes(x = mean_H2)) +
+  geom_histogram(bins = 40, fill = "skyblue", color = "white", alpha = 0.7) +
+  geom_vline(xintercept = obs_WLmean, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = WLci, color = "darkblue", linetype = "dotted", size = 1) +
+  labs(
+    title = "Bootstrap distribution of mean wing length ICC (H²)",
+    x = "Mean ICC (bootstrap samples)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+print(pWL)
+
+#Wing width
+# Function to compute ICC (H2) for each provenance
+get_H2 <- function(df) {
+  sapply(levels(df$Provenance), function(p) {
+    dsub <- subset(df, Provenance == p)
+    # catch cases with too few families
+    if(length(unique(dsub$Family)) < 2) return(NA)
+    m <- try(lmer(Wing_Width ~ (1|Family), data = dsub), silent = TRUE)
+    if(inherits(m, "try-error")) return(NA)
+    vars <- as.data.frame(VarCorr(m))
+    fam_var <- vars[vars$grp == "Family", "vcov"]
+    res_var <- vars[vars$grp == "Residual", "vcov"]
+    H2 <- (fam_var) / (fam_var + res_var)
+    return(H2)
+  })
+}
+
+# 1. Observed average ICC
+obs_WWH2 <- get_H2(df)
+obs_WWmean <- mean(obs_WWH2, na.rm = TRUE)
+
+# 2. Parallel stratified bootstrap
+set.seed(123)
+nboot <- 1000
+ncores <- detectCores() - 1
+cl <- makeCluster(ncores)
+
+clusterExport(cl, varlist = c("df", "get_H2"), envir = environment())
+clusterEvalQ(cl, library(lme4))
+
+boot_WWmeans <- parLapply(cl, 1:nboot, function(i) {
+  # --- resample families within each provenance ---
+  df_boot <- do.call(rbind, lapply(split(df, df$Provenance), function(dsub) {
+    fams <- unique(dsub$Family)                                 # list of families
+    sampled_fams <- sample(fams, length(fams), replace = TRUE)  # resample families with replacement
+    do.call(rbind, lapply(sampled_fams, function(f) {
+      dsub[dsub$Family == f, ]                                  # include all individuals from each sampled family
+    }))
+  }))
+  
+  # --- compute h2 per provenance for the bootstrap sample ---
+  H2_boot <- get_H2(df_boot)
+  
+  # --- average across provenances ---
+  mean(H2_boot, na.rm = TRUE)
+})
+
+boot_WWmeans <- unlist(boot_WWmeans)
+
+# 3. CI
+WWci <- quantile(boot_WWmeans, probs = c(0.025, 0.975), na.rm = TRUE)
+
+list(
+  observed_mean = obs_WWmean,
+  bootstrap_se = sd(boot_WWmeans, na.rm = TRUE),
+  ci_95 = WWci
+)
+
+# 4. Plot bootstrap distribution
+boot_WWdf <- data.frame(mean_H2 = boot_WWmeans)
+
+pWW <- ggplot(boot_WWdf, aes(x = mean_H2)) +
+  geom_histogram(bins = 40, fill = "skyblue", color = "white", alpha = 0.7) +
+  geom_vline(xintercept = obs_WWmean, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = WWci, color = "darkblue", linetype = "dotted", size = 1) +
+  labs(
+    title = "Bootstrap distribution of mean wing width ICC (H²)",
+    x = "Mean ICC (bootstrap samples)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+print(pWW)
+
+#seed area
+# Function to compute ICC (H2) for each provenance
+get_H2 <- function(df) {
+  sapply(levels(df$Provenance), function(p) {
+    dsub <- subset(df, Provenance == p)
+    # catch cases with too few families
+    if(length(unique(dsub$Family)) < 2) return(NA)
+    m <- try(lmer(Seed_Area ~ (1|Family), data = dsub), silent = TRUE)
+    if(inherits(m, "try-error")) return(NA)
+    vars <- as.data.frame(VarCorr(m))
+    fam_var <- vars[vars$grp == "Family", "vcov"]
+    res_var <- vars[vars$grp == "Residual", "vcov"]
+    H2 <- (fam_var) / (fam_var + res_var)
+    return(H2)
+  })
+}
+
+# 1. Observed average ICC
+obs_SAH2 <- get_H2(df)
+obs_SAmean <- mean(obs_SAH2, na.rm = TRUE)
+
+# 2. Parallel stratified bootstrap
+set.seed(123)
+nboot <- 1000
+ncores <- detectCores() - 1
+cl <- makeCluster(ncores)
+
+clusterExport(cl, varlist = c("df", "get_H2"), envir = environment())
+clusterEvalQ(cl, library(lme4))
+
+boot_SAmeans <- parLapply(cl, 1:nboot, function(i) {
+  # --- resample families within each provenance ---
+  df_boot <- do.call(rbind, lapply(split(df, df$Provenance), function(dsub) {
+    fams <- unique(dsub$Family)                                 # list of families
+    sampled_fams <- sample(fams, length(fams), replace = TRUE)  # resample families with replacement
+    do.call(rbind, lapply(sampled_fams, function(f) {
+      dsub[dsub$Family == f, ]                                  # include all individuals from each sampled family
+    }))
+  }))
+  
+  # --- compute h2 per provenance for the bootstrap sample ---
+  H2_boot <- get_H2(df_boot)
+  
+  # --- average across provenances ---
+  mean(H2_boot, na.rm = TRUE)
+})
+
+boot_SAmeans <- unlist(boot_SAmeans)
+
+# 3. CI
+SAci <- quantile(boot_SAmeans, probs = c(0.025, 0.975), na.rm = TRUE)
+
+list(
+  observed_mean = obs_SAmean,
+  bootstrap_se = sd(boot_SAmeans, na.rm = TRUE),
+  ci_95 = SAci
+)
+
+# 4. Plot bootstrap distribution
+boot_SAdf <- data.frame(mean_H2 = boot_SAmeans)
+
+pSA <- ggplot(boot_SAdf, aes(x = mean_H2)) +
+  geom_histogram(bins = 40, fill = "skyblue", color = "white", alpha = 0.7) +
+  geom_vline(xintercept = obs_SAmean, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = SAci, color = "darkblue", linetype = "dotted", size = 1) +
+  labs(
+    title = "Bootstrap distribution of mean seed area ICC (H²)",
+    x = "Mean ICC (bootstrap samples)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+print(pSA)
+
+#seed length
+# Function to compute ICC (H2) for each provenance
+get_H2 <- function(df) {
+  sapply(levels(df$Provenance), function(p) {
+    dsub <- subset(df, Provenance == p)
+    # catch cases with too few families
+    if(length(unique(dsub$Family)) < 2) return(NA)
+    m <- try(lmer(Seed_Length ~ (1|Family), data = dsub), silent = TRUE)
+    if(inherits(m, "try-error")) return(NA)
+    vars <- as.data.frame(VarCorr(m))
+    fam_var <- vars[vars$grp == "Family", "vcov"]
+    res_var <- vars[vars$grp == "Residual", "vcov"]
+    H2 <- (fam_var) / (fam_var + res_var)
+    return(H2)
+  })
+}
+
+# 1. Observed average ICC
+obs_SLH2 <- get_H2(df)
+obs_SLmean <- mean(obs_SLH2, na.rm = TRUE)
+
+# 2. Parallel stratified bootstrap
+set.seed(123)
+nboot <- 1000
+ncores <- detectCores() - 1
+cl <- makeCluster(ncores)
+
+clusterExport(cl, varlist = c("df", "get_H2"), envir = environment())
+clusterEvalQ(cl, library(lme4))
+
+boot_SLmeans <- parLapply(cl, 1:nboot, function(i) {
+  # --- resample families within each provenance ---
+  df_boot <- do.call(rbind, lapply(split(df, df$Provenance), function(dsub) {
+    fams <- unique(dsub$Family)                                 # list of families
+    sampled_fams <- sample(fams, length(fams), replace = TRUE)  # resample families with replacement
+    do.call(rbind, lapply(sampled_fams, function(f) {
+      dsub[dsub$Family == f, ]                                  # include all individuals from each sampled family
+    }))
+  }))
+  
+  # --- compute h2 per provenance for the bootstrap sample ---
+  H2_boot <- get_H2(df_boot)
+  
+  # --- average across provenances ---
+  mean(H2_boot, na.rm = TRUE)
+})
+
+boot_SLmeans <- unlist(boot_SLmeans)
+
+# 3. CI
+SLci <- quantile(boot_SLmeans, probs = c(0.025, 0.975), na.rm = TRUE)
+
+list(
+  observed_mean = obs_SLmean,
+  bootstrap_se = sd(boot_SLmeans, na.rm = TRUE),
+  ci_95 = SLci
+)
+
+# 4. Plot bootstrap distribution
+boot_SLdf <- data.frame(mean_H2 = boot_SLmeans)
+
+pSL <- ggplot(boot_SLdf, aes(x = mean_H2)) +
+  geom_histogram(bins = 40, fill = "skyblue", color = "white", alpha = 0.7) +
+  geom_vline(xintercept = obs_SLmean, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = SLci, color = "darkblue", linetype = "dotted", size = 1) +
+  labs(
+    title = "Bootstrap distribution of mean seed length ICC (H²)",
+    x = "Mean ICC (bootstrap samples)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+print(pSL)
+
+#seed width
+# Function to compute ICC (H2) for each provenance
+get_H2 <- function(df) {
+  sapply(levels(df$Provenance), function(p) {
+    dsub <- subset(df, Provenance == p)
+    # catch cases with too few families
+    if(length(unique(dsub$Family)) < 2) return(NA)
+    m <- try(lmer(Seed_Width ~ (1|Family), data = dsub), silent = TRUE)
+    if(inherits(m, "try-error")) return(NA)
+    vars <- as.data.frame(VarCorr(m))
+    fam_var <- vars[vars$grp == "Family", "vcov"]
+    res_var <- vars[vars$grp == "Residual", "vcov"]
+    H2 <- (fam_var) / (fam_var + res_var)
+    return(H2)
+  })
+}
+
+# 1. Observed average ICC
+obs_SWH2 <- get_H2(df)
+obs_SWmean <- mean(obs_SWH2, na.rm = TRUE)
+
+# 2. Parallel stratified bootstrap
+set.seed(123)
+nboot <- 1000
+ncores <- detectCores() - 1
+cl <- makeCluster(ncores)
+
+clusterExport(cl, varlist = c("df", "get_H2"), envir = environment())
+clusterEvalQ(cl, library(lme4))
+
+boot_SWmeans <- parLapply(cl, 1:nboot, function(i) {
+  # --- resample families within each provenance ---
+  df_boot <- do.call(rbind, lapply(split(df, df$Provenance), function(dsub) {
+    fams <- unique(dsub$Family)                                 # list of families
+    sampled_fams <- sample(fams, length(fams), replace = TRUE)  # resample families with replacement
+    do.call(rbind, lapply(sampled_fams, function(f) {
+      dsub[dsub$Family == f, ]                                  # include all individuals from each sampled family
+    }))
+  }))
+  
+  # --- compute h2 per provenance for the bootstrap sample ---
+  H2_boot <- get_H2(df_boot)
+  
+  # --- average across provenances ---
+  mean(H2_boot, na.rm = TRUE)
+})
+
+boot_SWmeans <- unlist(boot_SWmeans)
+
+# 3. CI
+SWci <- quantile(boot_SWmeans, probs = c(0.025, 0.975), na.rm = TRUE)
+
+list(
+  observed_mean = obs_SWmean,
+  bootstrap_se = sd(boot_SWmeans, na.rm = TRUE),
+  ci_95 = SWci
+)
+
+# 4. Plot bootstrap distribution
+boot_SWdf <- data.frame(mean_H2 = boot_SWmeans)
+
+pSW <- ggplot(boot_SWdf, aes(x = mean_H2)) +
+  geom_histogram(bins = 40, fill = "skyblue", color = "white", alpha = 0.7) +
+  geom_vline(xintercept = obs_SWmean, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = SWci, color = "darkblue", linetype = "dotted", size = 1) +
+  labs(
+    title = "Bootstrap distribution of mean seed width ICC (H²)",
+    x = "Mean ICC (bootstrap samples)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+print(pSW)
+
+#seed to wing area ratio
+# Function to compute ICC (H2) for each provenance
+get_H2 <- function(df) {
+  sapply(levels(df$Provenance), function(p) {
+    dsub <- subset(df, Provenance == p)
+    # catch cases with too few families
+    if(length(unique(dsub$Family)) < 2) return(NA)
+    m <- try(lmer(SeedtoWing_Area ~ (1|Family), data = dsub), silent = TRUE)
+    if(inherits(m, "try-error")) return(NA)
+    vars <- as.data.frame(VarCorr(m))
+    fam_var <- vars[vars$grp == "Family", "vcov"]
+    res_var <- vars[vars$grp == "Residual", "vcov"]
+    H2 <- (fam_var) / (fam_var + res_var)
+    return(H2)
+  })
+}
+
+# 1. Observed average ICC
+obs_SWAH2 <- get_H2(df)
+obs_SWAmean <- mean(obs_SWAH2, na.rm = TRUE)
+
+# 2. Parallel stratified bootstrap
+set.seed(123)
+nboot <- 1000
+ncores <- detectCores() - 1
+cl <- makeCluster(ncores)
+
+clusterExport(cl, varlist = c("df", "get_H2"), envir = environment())
+clusterEvalQ(cl, library(lme4))
+
+boot_SWAmeans <- parLapply(cl, 1:nboot, function(i) {
+  # --- resample families within each provenance ---
+  df_boot <- do.call(rbind, lapply(split(df, df$Provenance), function(dsub) {
+    fams <- unique(dsub$Family)                                 # list of families
+    sampled_fams <- sample(fams, length(fams), replace = TRUE)  # resample families with replacement
+    do.call(rbind, lapply(sampled_fams, function(f) {
+      dsub[dsub$Family == f, ]                                  # include all individuals from each sampled family
+    }))
+  }))
+  
+  # --- compute h2 per provenance for the bootstrap sample ---
+  H2_boot <- get_H2(df_boot)
+  
+  # --- average across provenances ---
+  mean(H2_boot, na.rm = TRUE)
+})
+
+boot_SWAmeans <- unlist(boot_SWAmeans)
+
+# 3. CI
+SWAci <- quantile(boot_SWAmeans, probs = c(0.025, 0.975), na.rm = TRUE)
+
+list(
+  observed_mean = obs_SWAmean,
+  bootstrap_se = sd(boot_SWAmeans, na.rm = TRUE),
+  ci_95 = SWAci
+)
+
+# 4. Plot bootstrap distribution
+boot_SWAdf <- data.frame(mean_H2 = boot_SWAmeans)
+
+pSWA <- ggplot(boot_SWAdf, aes(x = mean_H2)) +
+  geom_histogram(bins = 40, fill = "skyblue", color = "white", alpha = 0.7) +
+  geom_vline(xintercept = obs_SWAmean, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = SWAci, color = "darkblue", linetype = "dotted", size = 1) +
+  labs(
+    title = "Bootstrap distribution of mean seed to wing area ratio ICC (H²)",
+    x = "Mean ICC (bootstrap samples)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+print(pSWA)
+
+#Wing length to width ratio
+# Function to compute ICC (H2) for each provenance
+get_H2 <- function(df) {
+  sapply(levels(df$Provenance), function(p) {
+    dsub <- subset(df, Provenance == p)
+    # catch cases with too few families
+    if(length(unique(dsub$Family)) < 2) return(NA)
+    m <- try(lmer(Wing_LengthtoWidth ~ (1|Family), data = dsub), silent = TRUE)
+    if(inherits(m, "try-error")) return(NA)
+    vars <- as.data.frame(VarCorr(m))
+    fam_var <- vars[vars$grp == "Family", "vcov"]
+    res_var <- vars[vars$grp == "Residual", "vcov"]
+    H2 <- (fam_var) / (fam_var + res_var)
+    return(H2)
+  })
+}
+
+# 1. Observed average ICC
+obs_WLWH2 <- get_H2(df)
+obs_WLWmean <- mean(obs_WLWH2, na.rm = TRUE)
+
+# 2. Parallel stratified bootstrap
+set.seed(123)
+nboot <- 1000
+ncores <- detectCores() - 1
+cl <- makeCluster(ncores)
+
+clusterExport(cl, varlist = c("df", "get_H2"), envir = environment())
+clusterEvalQ(cl, library(lme4))
+
+boot_WLWmeans <- parLapply(cl, 1:nboot, function(i) {
+  # --- resample families within each provenance ---
+  df_boot <- do.call(rbind, lapply(split(df, df$Provenance), function(dsub) {
+    fams <- unique(dsub$Family)                                 # list of families
+    sampled_fams <- sample(fams, length(fams), replace = TRUE)  # resample families with replacement
+    do.call(rbind, lapply(sampled_fams, function(f) {
+      dsub[dsub$Family == f, ]                                  # include all individuals from each sampled family
+    }))
+  }))
+  
+  # --- compute h2 per provenance for the bootstrap sample ---
+  H2_boot <- get_H2(df_boot)
+  
+  # --- average across provenances ---
+  mean(H2_boot, na.rm = TRUE)
+})
+
+boot_WLWmeans <- unlist(boot_WLWmeans)
+
+# 3. CI
+WLWci <- quantile(boot_WLWmeans, probs = c(0.025, 0.975), na.rm = TRUE)
+
+list(
+  observed_mean = obs_WLWmean,
+  bootstrap_se = sd(boot_WLWmeans, na.rm = TRUE),
+  ci_95 = WLWci
+)
+
+# 4. Plot bootstrap distribution
+boot_WLWdf <- data.frame(mean_H2 = boot_WLWmeans)
+
+pWLW <- ggplot(boot_WLWdf, aes(x = mean_H2)) +
+  geom_histogram(bins = 40, fill = "skyblue", color = "white", alpha = 0.7) +
+  geom_vline(xintercept = obs_WLWmean, color = "red", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = WLWci, color = "darkblue", linetype = "dotted", size = 1) +
+  labs(
+    title = "Bootstrap distribution of mean wing length to width ratio ICC (H²)",
+    x = "Mean ICC (bootstrap samples)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+print(pWLW)
+
+repeatability_df <- matrix(nrow = 8, ncol = 4)
+rownames(repeatability_df) <- c("Wing Area", "Wing Length", "Wing Width", "Seed Area", "Seed Length", "Seed Width", "Seed to Wing Area Ratio", "Wing Length to Width Ratio")
+colnames(repeatability_df) <- c("Observed_Mean", "SD", "low_CI", "high_CI")
+
+repeatability_df[1,1] <- obs_WAmean
+repeatability_df[1,2] <- sd(obs_WAH2)
+repeatability_df[1,3:4] <- WAci
+repeatability_df[2,1] <- obs_WLmean
+repeatability_df[2,2] <- sd(obs_WLH2)
+repeatability_df[2,3:4] <- WLci
+repeatability_df[3,1] <- obs_WWmean
+repeatability_df[3,2] <- sd(obs_WWH2)
+repeatability_df[3,3:4] <- WWci
+repeatability_df[4,1] <- obs_SAmean
+repeatability_df[4,2] <- sd(obs_SAH2)
+repeatability_df[4,3:4] <- SAci
+repeatability_df[5,1] <- obs_SLmean
+repeatability_df[5,2] <- sd(obs_SLH2)
+repeatability_df[5,3:4] <- SLci
+repeatability_df[6,1] <- obs_SWmean
+repeatability_df[6,2] <- sd(obs_SWH2)
+repeatability_df[6,3:4] <- SWci
+repeatability_df[7,1] <- obs_SWAmean
+repeatability_df[7,2] <- sd(obs_SWAH2)
+repeatability_df[7,3:4] <- SWAci
+repeatability_df[8,1] <- obs_WLWmean
+repeatability_df[8,2] <- sd(obs_WLWH2)
+repeatability_df[8,3:4] <- WLWci
+
+repeatability_df <- as.data.frame(repeatability_df)
+write.csv(repeatability_df, file = "FRANIG_SeedMorph_Repeatability_CIs.csv")
+
+```
+

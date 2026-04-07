@@ -1,0 +1,686 @@
+---
+title: "FRANIG Seed Morphology - Trait-Trait Linear Regressions"
+author: "KyraL"
+date: "2026-02-12"
+output: html_document
+---
+
+#Introduction
+This code was used to calculate trait-trait linear regressions between greenhouse traits and seed traits averaged at the population level. We also performed a Pearson correlation between traits to see how much they covaried.
+
+#Read in Data
+```{r}
+setwd("~/GitHub/Ash/FRANIG_Seed")
+library(tidyverse)
+
+#load climate and seed trait data
+FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y <- read_csv("~/GitHub/Ash/FRANIG_Seed/FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y.csv")
+colnames(FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y)[colnames(FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y) == "id2"] <- "Prov"
+
+df_seedmorph <- read_csv("~/GitHub/Ash/FRANIG_Seed/df.seedmorph.csv")
+df_seedmorph$`100_Seed_Weight_mg` <- as.numeric(df_seedmorph$`100_Seed_Weight_mg`)
+colnames(df_seedmorph)[colnames(df_seedmorph) == "Provenance...11"] <- "Prov"
+
+#aggregate provenance means for each trait
+mean_SamA <- aggregate(Samara_Area_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SamW <- aggregate(Samara_Width_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SamL <- aggregate(Samara_Length_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SeeA <- aggregate(Seed_Area_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SeeW <- aggregate(Seed_Width_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SeeL <- aggregate(Seed_Length_Combined ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SeeSamA <- aggregate(Seed_Samara_AreaRatio ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SamWL <- aggregate(Samara_WidthLengthRatio ~ Prov, data = df_seedmorph, FUN = mean)
+mean_SW <- aggregate(`100_Seed_Weight_mg` ~ Prov, data = df_seedmorph, FUN = mean)
+df_list <- list(mean_SamA, mean_SamL, mean_SamW, mean_SeeA, mean_SeeL, mean_SeeW, mean_SeeSamA, mean_SamWL, mean_SW)
+morphological_trait_populationmeans <- reduce(df_list, full_join, by = "Prov")
+
+#merge climate and seed trait data
+climate_morphology_merged <- left_join(morphological_trait_populationmeans, FRANIGSeedMorph_PopulationCentroide_NoYearStrat_Normal_1961_1990Y, by = "Prov")
+climate_morphology_merged <- climate_morphology_merged[!is.na(climate_morphology_merged$Latitude),]
+
+#add in greenhouse traits
+FRANIG_HC_MORPH_COMPLETE <- read_csv("~/GitHub/Ash/FRANIG_Seed/FRANIG_HC_MORPH_COMPLETE.csv")
+greenhouse_traits <- FRANIG_HC_MORPH_COMPLETE[,c(3,7,9:12,20)]
+colnames(greenhouse_traits)[colnames(greenhouse_traits) == "id2"] <- "Prov"
+
+#calculate population means
+mean_propemerged <- aggregate(Proportion_Emerged ~ Prov, data = greenhouse_traits, FUN = mean)
+mean_height <- aggregate(Height_cm ~ Prov, data = greenhouse_traits, FUN = mean)
+mean_emergencetime <- aggregate(Time_to_Emergence ~ Prov, data = greenhouse_traits, FUN = mean)
+mean_trueleaftime<- aggregate(Time_to_TrueLeaves ~ Prov, data = greenhouse_traits, FUN = mean)
+mean_compoundleaftime <- aggregate(Time_to_CompoundLeaves ~ Prov, data = greenhouse_traits, FUN = mean)
+df_list <- list(mean_propemerged, mean_height, mean_emergencetime, mean_trueleaftime, mean_compoundleaftime)
+greenhouse_trait_populationmeans <- reduce(df_list, full_join, by = "Prov")
+
+#merge seed traits, greenhouse traits, and climate data
+climate_morphology_merged <- left_join(climate_morphology_merged, greenhouse_trait_populationmeans, by = "Prov")
+
+colnames(climate_morphology_merged) <- c("Prov", "Wing_Area","Wing_Length","Wing_Width","Seed_Area", "Seed_Length","Seed_Width","Seed_to_Wing_AreaRatio","Wing_Length_to_WidthRatio","Seed_Weight",
+"id1", "Latitude", "Longitude","Elevation", "MAT", "MWMT", "MCMT" ,"TD", "MAP", "MSP", "AHM" ,"SHM" , "DD_0", "DD5" ,"DD_18" ,"DD18", "NFFD",  "bFFP","eFFP" , "FFP", "PAS" , "EMT",  "EXT"  ,"MAR" ,"Eref" , "CMD", "RH", "CMI" ,"DD1040", "Proportion_Emerged", "Height_cm" ,"Time_to_Emergence" ,"Time_to_TrueLeaves", "Time_to_CompoundLeaves")
+
+```
+
+#trait-trait correlations
+```{r}
+#subset trait data
+traits <- climate_morphology_merged[,c(2:10,40:44,47)]
+
+cor_matrix<-cor(traits, method = "pearson" ,
+                  use = "pairwise.complete.obs")
+library(corrplot)
+corrplot(cor_matrix, method = "color", type = "lower", col = colorRampPalette(c("blue", "white", "red"))(200),addCoef.col = "black", tl.cex = 0.8,tl.col = "black", number.cex = 0.4)
+```
+
+#Linear regressions
+##Proportion Emerged
+```{r}
+library(cowplot)
+library(gridExtra)
+#proportion emerged
+y_var <- "Proportion_Emerged"
+x_vars <- c("Seed_Weight", "Wing_Area", "Seed_Area", "Wing_Length","Seed_Length","Wing_Width","Seed_Width", "Seed_to_Wing_AreaRatio", "Wing_Length_to_WidthRatio")
+
+plot_list <- list()
+model_list <- list()
+
+for (x_var in x_vars) {
+  
+  # Fit the linear model
+  formula <- as.formula(paste(y_var, "~", x_var))  # Create formula dynamically
+  model <- lm(formula, data = climate_morphology_merged)
+  
+  model_list[[x_var]] <- model
+  
+  # Extract R² and p-value
+  r2 <- summary(model)$r.squared
+  p_value <- summary(model)$coefficients[2, 4]
+  
+   # Determine top-right position dynamically
+  x_pos <- max(climate_morphology_merged[[x_var]], na.rm = TRUE) * 0.9  # Slightly left from max x
+  y_pos <- max(climate_morphology_merged[[y_var]], na.rm = TRUE) * 0.9  # Slightly below max y
+  
+  # Generate ggplot
+  p <- ggplot(climate_morphology_merged, aes_string(x = x_var, y = y_var)) +  # Use aes_string() for dynamic mapping
+    geom_point() + 
+    geom_smooth(method = "lm", se = T, color = "blue") +
+    annotate("text", x = x_pos, y = y_pos,
+             label = paste0("R² = ", round(r2, 3), "\nP = ", signif(p_value, 3)),
+             size = 3, color = "black") + theme(panel.background = element_blank(), panel.grid.major =    element_line("grey")) +
+    ggtitle(paste("Proportion Emerged", "vs", x_var)) + ylab("Proportion Emerged")
+  
+  # Print each plot
+  plot_list[[x_var]] <- p
+}
+
+library(purrr)
+library(dplyr)
+
+model_summary <- map_dfr(
+  model_list,
+  ~{
+    sm <- summary(.x)
+    coefs <- sm$coefficients
+    
+    tibble(
+      R_squared = sm$r.squared,
+      Estimate  = coefs[2, "Estimate"],
+      Std_Error = coefs[2, "Std. Error"],
+      P_value   = coefs[2, "Pr(>|t|)"]
+    )
+  },
+  .id = "Predictor"
+)
+write.csv(model_summary, file = "Proportion_emerged_SeedMoprh_Stats_PopLevel.csv")
+
+plots_combined <- marrangeGrob(grobs = plot_list, ncol = 2, nrow = 3)
+
+ggsave("Proportion Emerged_SeedMorphRegressions_PopLevel.pdf", plots_combined, width = 10, height = 7)
+
+
+# Create a list to store diagnostic plots
+diagnostic_plots <- list()
+
+# Loop through each model in model_list
+for (x_var in names(model_list)) {
+  
+  model <- model_list[[x_var]]
+  resid <- residuals(model)
+  fitted <- fitted(model)
+  
+  # --- QQ Plot of residuals ---
+  qq_data <- data.frame(
+    Theoretical = qqnorm(resid, plot.it = FALSE)$x,
+    Sample = qqnorm(resid, plot.it = FALSE)$y
+  )
+  
+  # Compute slope and intercept for qqline (like base R qqline)
+  q_theoretical <- quantile(qq_data$Theoretical, probs = c(0.25, 0.75))
+  q_sample <- quantile(qq_data$Sample, probs = c(0.25, 0.75))
+  slope <- diff(q_sample) / diff(q_theoretical)
+  intercept <- q_sample[1] - slope * q_theoretical[1]
+  
+  # --- QQ Plot with QQ Line ---
+  qq_plot <- ggplot(qq_data, aes(x = Theoretical, y = Sample)) +
+    geom_point() +
+    geom_abline(slope = slope, intercept = intercept, color = "red", linetype = "dashed", linewidth = 0.8) +
+    ggtitle(paste("QQ Plot of Residuals for", x_var)) +
+    theme_bw()
+  
+  # --- Residuals vs Fitted Plot ---
+  resid_plot <- ggplot(data.frame(Fitted = fitted, Residuals = resid),
+                       aes(x = Fitted, y = Residuals)) +
+    geom_point() +
+    geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+    ggtitle(paste("Residuals vs Fitted for", x_var)) +
+    xlab("Fitted Values") +
+    ylab("Residuals") +
+    theme_bw()
+  
+  # Combine both plots vertically
+  combined_plot <- gridExtra::grid.arrange(qq_plot, resid_plot, ncol = 1)
+  
+  diagnostic_plots[[x_var]] <- combined_plot
+}
+
+# Save all diagnostic plots to a single PDF
+
+plots_combined <- marrangeGrob(grobs = diagnostic_plots, ncol = 2, nrow = 2)
+
+ggsave("Proportion Emerged_SeedMorph_Diagnostics_PopLevel.pdf", plots_combined, width = 10, height = 7)
+
+```
+##Height
+```{r}
+library(cowplot)
+library(gridExtra)
+#proportion emerged
+y_var <- "Height_cm"
+x_vars <- c("Seed_Weight", "Wing_Area", "Seed_Area", "Wing_Length","Seed_Length","Wing_Width","Seed_Width", "Seed_to_Wing_AreaRatio", "Wing_Length_to_WidthRatio")
+
+plot_list <- list()
+model_list <- list()
+
+for (x_var in x_vars) {
+  
+  # Fit the linear model
+  formula <- as.formula(paste(y_var, "~", x_var))  # Create formula dynamically
+  model <- lm(formula, data = climate_morphology_merged)
+  
+  model_list[[x_var]] <- model
+  
+  # Extract R² and p-value
+  r2 <- summary(model)$r.squared
+  p_value <- summary(model)$coefficients[2, 4]
+  
+   # Determine top-right position dynamically
+  x_pos <- max(climate_morphology_merged[[x_var]], na.rm = TRUE) * 0.9  # Slightly left from max x
+  y_pos <- max(climate_morphology_merged[[y_var]], na.rm = TRUE) * 0.9  # Slightly below max y
+  
+  # Generate ggplot
+  p <- ggplot(climate_morphology_merged, aes_string(x = x_var, y = y_var)) +  # Use aes_string() for dynamic mapping
+    geom_point() + 
+    geom_smooth(method = "lm", se = T, color = "blue") +
+    annotate("text", x = x_pos, y = y_pos,
+             label = paste0("R² = ", round(r2, 3), "\nP = ", signif(p_value, 3)),
+             size = 3, color = "black") + theme(panel.background = element_blank(), panel.grid.major =    element_line("grey")) +
+    ggtitle(paste("Height", "vs", x_var)) + ylab("Height")
+  
+  # Print each plot
+  plot_list[[x_var]] <- p
+}
+
+library(purrr)
+library(dplyr)
+
+model_summary <- map_dfr(
+  model_list,
+  ~{
+    sm <- summary(.x)
+    coefs <- sm$coefficients
+    
+    tibble(
+      R_squared = sm$r.squared,
+      Estimate  = coefs[2, "Estimate"],
+      Std_Error = coefs[2, "Std. Error"],
+      P_value   = coefs[2, "Pr(>|t|)"]
+    )
+  },
+  .id = "Predictor"
+)
+write.csv(model_summary, file = "Height_SeedMoprh_Stats_PopLevel.csv")
+
+plots_combined <- marrangeGrob(grobs = plot_list, ncol = 2, nrow = 3)
+
+ggsave("Height_SeedMorphRegressions_PopLevel.pdf", plots_combined, width = 10, height = 7)
+
+
+# Create a list to store diagnostic plots
+diagnostic_plots <- list()
+
+# Loop through each model in model_list
+for (x_var in names(model_list)) {
+  
+  model <- model_list[[x_var]]
+  resid <- residuals(model)
+  fitted <- fitted(model)
+  
+  # --- QQ Plot of residuals ---
+  qq_data <- data.frame(
+    Theoretical = qqnorm(resid, plot.it = FALSE)$x,
+    Sample = qqnorm(resid, plot.it = FALSE)$y
+  )
+  
+  # Compute slope and intercept for qqline (like base R qqline)
+  q_theoretical <- quantile(qq_data$Theoretical, probs = c(0.25, 0.75))
+  q_sample <- quantile(qq_data$Sample, probs = c(0.25, 0.75))
+  slope <- diff(q_sample) / diff(q_theoretical)
+  intercept <- q_sample[1] - slope * q_theoretical[1]
+  
+  # --- QQ Plot with QQ Line ---
+  qq_plot <- ggplot(qq_data, aes(x = Theoretical, y = Sample)) +
+    geom_point() +
+    geom_abline(slope = slope, intercept = intercept, color = "red", linetype = "dashed", linewidth = 0.8) +
+    ggtitle(paste("QQ Plot of Residuals for", x_var)) +
+    theme_bw()
+  
+  # --- Residuals vs Fitted Plot ---
+  resid_plot <- ggplot(data.frame(Fitted = fitted, Residuals = resid),
+                       aes(x = Fitted, y = Residuals)) +
+    geom_point() +
+    geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+    ggtitle(paste("Residuals vs Fitted for", x_var)) +
+    xlab("Fitted Values") +
+    ylab("Residuals") +
+    theme_bw()
+  
+  # Combine both plots vertically
+  combined_plot <- gridExtra::grid.arrange(qq_plot, resid_plot, ncol = 1)
+  
+  diagnostic_plots[[x_var]] <- combined_plot
+}
+
+# Save all diagnostic plots to a single PDF
+
+plots_combined <- marrangeGrob(grobs = diagnostic_plots, ncol = 2, nrow = 2)
+
+ggsave("Height_SeedMorph_Diagnostics_PopLevel.pdf", plots_combined, width = 10, height = 7)
+
+```
+##Time to Emergence
+```{r}
+library(cowplot)
+library(gridExtra)
+#proportion emerged
+y_var <- "Time_to_Emergence"
+x_vars <- c("Seed_Weight", "Wing_Area", "Seed_Area", "Wing_Length","Seed_Length","Wing_Width","Seed_Width", "Seed_to_Wing_AreaRatio", "Wing_Length_to_WidthRatio")
+
+plot_list <- list()
+model_list <- list()
+
+for (x_var in x_vars) {
+  
+  # Fit the linear model
+  formula <- as.formula(paste(y_var, "~", x_var))  # Create formula dynamically
+  model <- lm(formula, data = climate_morphology_merged)
+  
+  model_list[[x_var]] <- model
+  
+  # Extract R² and p-value
+  r2 <- summary(model)$r.squared
+  p_value <- summary(model)$coefficients[2, 4]
+  
+   # Determine top-right position dynamically
+  x_pos <- max(climate_morphology_merged[[x_var]], na.rm = TRUE) * 0.9  # Slightly left from max x
+  y_pos <- max(climate_morphology_merged[[y_var]], na.rm = TRUE) * 0.9  # Slightly below max y
+  
+  # Generate ggplot
+  p <- ggplot(climate_morphology_merged, aes_string(x = x_var, y = y_var)) +  # Use aes_string() for dynamic mapping
+    geom_point() + 
+    geom_smooth(method = "lm", se = T, color = "blue") +
+    annotate("text", x = x_pos, y = y_pos,
+             label = paste0("R² = ", round(r2, 3), "\nP = ", signif(p_value, 3)),
+             size = 3, color = "black") + theme(panel.background = element_blank(), panel.grid.major =    element_line("grey")) +
+    ggtitle(paste("Time to Emergence", "vs", x_var)) + ylab("Time to Emergence")
+  
+  # Print each plot
+  plot_list[[x_var]] <- p
+}
+
+library(purrr)
+library(dplyr)
+
+model_summary <- map_dfr(
+  model_list,
+  ~{
+    sm <- summary(.x)
+    coefs <- sm$coefficients
+    
+    tibble(
+      R_squared = sm$r.squared,
+      Estimate  = coefs[2, "Estimate"],
+      Std_Error = coefs[2, "Std. Error"],
+      P_value   = coefs[2, "Pr(>|t|)"]
+    )
+  },
+  .id = "Predictor"
+)
+write.csv(model_summary, file = "Time_to_Emergence_SeedMoprh_Stats_PopLevel.csv")
+
+plots_combined <- marrangeGrob(grobs = plot_list, ncol = 2, nrow = 3)
+
+ggsave("Time_to_Emergence_SeedMorphRegressions_PopLevel.pdf", plots_combined, width = 10, height = 7)
+
+
+# Create a list to store diagnostic plots
+diagnostic_plots <- list()
+
+# Loop through each model in model_list
+for (x_var in names(model_list)) {
+  
+  model <- model_list[[x_var]]
+  resid <- residuals(model)
+  fitted <- fitted(model)
+  
+  # --- QQ Plot of residuals ---
+  qq_data <- data.frame(
+    Theoretical = qqnorm(resid, plot.it = FALSE)$x,
+    Sample = qqnorm(resid, plot.it = FALSE)$y
+  )
+  
+  # Compute slope and intercept for qqline (like base R qqline)
+  q_theoretical <- quantile(qq_data$Theoretical, probs = c(0.25, 0.75))
+  q_sample <- quantile(qq_data$Sample, probs = c(0.25, 0.75))
+  slope <- diff(q_sample) / diff(q_theoretical)
+  intercept <- q_sample[1] - slope * q_theoretical[1]
+  
+  # --- QQ Plot with QQ Line ---
+  qq_plot <- ggplot(qq_data, aes(x = Theoretical, y = Sample)) +
+    geom_point() +
+    geom_abline(slope = slope, intercept = intercept, color = "red", linetype = "dashed", linewidth = 0.8) +
+    ggtitle(paste("QQ Plot of Residuals for", x_var)) +
+    theme_bw()
+  
+  # --- Residuals vs Fitted Plot ---
+  resid_plot <- ggplot(data.frame(Fitted = fitted, Residuals = resid),
+                       aes(x = Fitted, y = Residuals)) +
+    geom_point() +
+    geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+    ggtitle(paste("Residuals vs Fitted for", x_var)) +
+    xlab("Fitted Values") +
+    ylab("Residuals") +
+    theme_bw()
+  
+  # Combine both plots vertically
+  combined_plot <- gridExtra::grid.arrange(qq_plot, resid_plot, ncol = 1)
+  
+  diagnostic_plots[[x_var]] <- combined_plot
+}
+
+# Save all diagnostic plots to a single PDF
+
+plots_combined <- marrangeGrob(grobs = diagnostic_plots, ncol = 2, nrow = 2)
+
+ggsave("Time_to_Emergence_SeedMorph_Diagnostics_PopLevel.pdf", plots_combined, width = 10, height = 7)
+
+```
+##Time to True Leaves
+```{r}
+library(cowplot)
+library(gridExtra)
+#proportion emerged
+y_var <- "Time_to_TrueLeaves"
+x_vars <- c("Seed_Weight", "Wing_Area", "Seed_Area", "Wing_Length","Seed_Length","Wing_Width","Seed_Width", "Seed_to_Wing_AreaRatio", "Wing_Length_to_WidthRatio")
+
+plot_list <- list()
+model_list <- list()
+
+for (x_var in x_vars) {
+  
+  # Fit the linear model
+  formula <- as.formula(paste(y_var, "~", x_var))  # Create formula dynamically
+  model <- lm(formula, data = climate_morphology_merged)
+  
+  model_list[[x_var]] <- model
+  
+  # Extract R² and p-value
+  r2 <- summary(model)$r.squared
+  p_value <- summary(model)$coefficients[2, 4]
+  
+   # Determine top-right position dynamically
+  x_pos <- max(climate_morphology_merged[[x_var]], na.rm = TRUE) * 0.9  # Slightly left from max x
+  y_pos <- max(climate_morphology_merged[[y_var]], na.rm = TRUE) * 0.9  # Slightly below max y
+  
+  # Generate ggplot
+  p <- ggplot(climate_morphology_merged, aes_string(x = x_var, y = y_var)) +  # Use aes_string() for dynamic mapping
+    geom_point() + 
+    geom_smooth(method = "lm", se = T, color = "blue") +
+    annotate("text", x = x_pos, y = y_pos,
+             label = paste0("R² = ", round(r2, 3), "\nP = ", signif(p_value, 3)),
+             size = 3, color = "black") + theme(panel.background = element_blank(), panel.grid.major =    element_line("grey")) +
+    ggtitle(paste("Time to True Leaves", "vs", x_var)) + ylab("Time to True Leaves")
+  
+  # Print each plot
+  plot_list[[x_var]] <- p
+}
+
+library(purrr)
+library(dplyr)
+
+model_summary <- map_dfr(
+  model_list,
+  ~{
+    sm <- summary(.x)
+    coefs <- sm$coefficients
+    
+    tibble(
+      R_squared = sm$r.squared,
+      Estimate  = coefs[2, "Estimate"],
+      Std_Error = coefs[2, "Std. Error"],
+      P_value   = coefs[2, "Pr(>|t|)"]
+    )
+  },
+  .id = "Predictor"
+)
+write.csv(model_summary, file = "Time_to_TrueLeaves_SeedMoprh_Stats_PopLevel.csv")
+
+plots_combined <- marrangeGrob(grobs = plot_list, ncol = 2, nrow = 3)
+
+ggsave("Time_to_TrueLeaves_SeedMorphRegressions_PopLevel.pdf", plots_combined, width = 10, height = 7)
+
+
+# Create a list to store diagnostic plots
+diagnostic_plots <- list()
+
+# Loop through each model in model_list
+for (x_var in names(model_list)) {
+  
+  model <- model_list[[x_var]]
+  resid <- residuals(model)
+  fitted <- fitted(model)
+  
+  # --- QQ Plot of residuals ---
+  qq_data <- data.frame(
+    Theoretical = qqnorm(resid, plot.it = FALSE)$x,
+    Sample = qqnorm(resid, plot.it = FALSE)$y
+  )
+  
+  # Compute slope and intercept for qqline (like base R qqline)
+  q_theoretical <- quantile(qq_data$Theoretical, probs = c(0.25, 0.75))
+  q_sample <- quantile(qq_data$Sample, probs = c(0.25, 0.75))
+  slope <- diff(q_sample) / diff(q_theoretical)
+  intercept <- q_sample[1] - slope * q_theoretical[1]
+  
+  # --- QQ Plot with QQ Line ---
+  qq_plot <- ggplot(qq_data, aes(x = Theoretical, y = Sample)) +
+    geom_point() +
+    geom_abline(slope = slope, intercept = intercept, color = "red", linetype = "dashed", linewidth = 0.8) +
+    ggtitle(paste("QQ Plot of Residuals for", x_var)) +
+    theme_bw()
+  
+  # --- Residuals vs Fitted Plot ---
+  resid_plot <- ggplot(data.frame(Fitted = fitted, Residuals = resid),
+                       aes(x = Fitted, y = Residuals)) +
+    geom_point() +
+    geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+    ggtitle(paste("Residuals vs Fitted for", x_var)) +
+    xlab("Fitted Values") +
+    ylab("Residuals") +
+    theme_bw()
+  
+  # Combine both plots vertically
+  combined_plot <- gridExtra::grid.arrange(qq_plot, resid_plot, ncol = 1)
+  
+  diagnostic_plots[[x_var]] <- combined_plot
+}
+
+# Save all diagnostic plots to a single PDF
+
+plots_combined <- marrangeGrob(grobs = diagnostic_plots, ncol = 2, nrow = 2)
+
+ggsave("Time_to_TrueLeaves_SeedMorph_Diagnostics_PopLevel.pdf", plots_combined, width = 10, height = 7)
+
+```
+##Time to Compound Leaves
+```{r}
+library(cowplot)
+library(gridExtra)
+#proportion emerged
+y_var <- "Time_to_CompoundLeaves"
+x_vars <- c("Seed_Weight", "Wing_Area", "Seed_Area", "Wing_Length","Seed_Length","Wing_Width","Seed_Width", "Seed_to_Wing_AreaRatio", "Wing_Length_to_WidthRatio")
+
+plot_list <- list()
+model_list <- list()
+
+for (x_var in x_vars) {
+  
+  # Fit the linear model
+  formula <- as.formula(paste(y_var, "~", x_var))  # Create formula dynamically
+  model <- lm(formula, data = climate_morphology_merged)
+  
+  model_list[[x_var]] <- model
+  
+  # Extract R² and p-value
+  r2 <- summary(model)$r.squared
+  p_value <- summary(model)$coefficients[2, 4]
+  
+   # Determine top-right position dynamically
+  x_pos <- max(climate_morphology_merged[[x_var]], na.rm = TRUE) * 0.9  # Slightly left from max x
+  y_pos <- max(climate_morphology_merged[[y_var]], na.rm = TRUE) * 0.9  # Slightly below max y
+  
+  # Generate ggplot
+  p <- ggplot(climate_morphology_merged, aes_string(x = x_var, y = y_var)) +  # Use aes_string() for dynamic mapping
+    geom_point() + 
+    geom_smooth(method = "lm", se = T, color = "blue") +
+    annotate("text", x = x_pos, y = y_pos,
+             label = paste0("R² = ", round(r2, 3), "\nP = ", signif(p_value, 3)),
+             size = 3, color = "black") + theme(panel.background = element_blank(), panel.grid.major =    element_line("grey")) +
+    ggtitle(paste("Time to Compound Leaves", "vs", x_var)) + ylab("Time to Compound Leaves")
+  
+  # Print each plot
+  plot_list[[x_var]] <- p
+}
+
+library(purrr)
+library(dplyr)
+
+model_summary <- map_dfr(
+  model_list,
+  ~{
+    sm <- summary(.x)
+    coefs <- sm$coefficients
+    
+    tibble(
+      R_squared = sm$r.squared,
+      Estimate  = coefs[2, "Estimate"],
+      Std_Error = coefs[2, "Std. Error"],
+      P_value   = coefs[2, "Pr(>|t|)"]
+    )
+  },
+  .id = "Predictor"
+)
+write.csv(model_summary, file = "Time_to_CompLeaves_SeedMoprh_Stats_PopLevel.csv")
+
+plots_combined <- marrangeGrob(grobs = plot_list, ncol = 2, nrow = 3)
+
+ggsave("Time_to_CompLeaves_SeedMorphRegressions_PopLevel.pdf", plots_combined, width = 10, height = 7)
+
+
+# Create a list to store diagnostic plots
+diagnostic_plots <- list()
+
+# Loop through each model in model_list
+for (x_var in names(model_list)) {
+  
+  model <- model_list[[x_var]]
+  resid <- residuals(model)
+  fitted <- fitted(model)
+  
+  # --- QQ Plot of residuals ---
+  qq_data <- data.frame(
+    Theoretical = qqnorm(resid, plot.it = FALSE)$x,
+    Sample = qqnorm(resid, plot.it = FALSE)$y
+  )
+  
+  # Compute slope and intercept for qqline (like base R qqline)
+  q_theoretical <- quantile(qq_data$Theoretical, probs = c(0.25, 0.75))
+  q_sample <- quantile(qq_data$Sample, probs = c(0.25, 0.75))
+  slope <- diff(q_sample) / diff(q_theoretical)
+  intercept <- q_sample[1] - slope * q_theoretical[1]
+  
+  # --- QQ Plot with QQ Line ---
+  qq_plot <- ggplot(qq_data, aes(x = Theoretical, y = Sample)) +
+    geom_point() +
+    geom_abline(slope = slope, intercept = intercept, color = "red", linetype = "dashed", linewidth = 0.8) +
+    ggtitle(paste("QQ Plot of Residuals for", x_var)) +
+    theme_bw()
+  
+  # --- Residuals vs Fitted Plot ---
+  resid_plot <- ggplot(data.frame(Fitted = fitted, Residuals = resid),
+                       aes(x = Fitted, y = Residuals)) +
+    geom_point() +
+    geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+    ggtitle(paste("Residuals vs Fitted for", x_var)) +
+    xlab("Fitted Values") +
+    ylab("Residuals") +
+    theme_bw()
+  
+  # Combine both plots vertically
+  combined_plot <- gridExtra::grid.arrange(qq_plot, resid_plot, ncol = 1)
+  
+  diagnostic_plots[[x_var]] <- combined_plot
+}
+
+# Save all diagnostic plots to a single PDF
+
+plots_combined <- marrangeGrob(grobs = diagnostic_plots, ncol = 2, nrow = 2)
+
+ggsave("Time_to_CompLeaves_SeedMorph_Diagnostics_PopLevel.pdf", plots_combined, width = 10, height = 7)
+
+```
+
+#manuscript plot
+```{r}
+a <- ggplot(climate_morphology_merged, aes(x = Seed_Weight, y = Proportion_Emerged)) +
+    geom_point()+theme(panel.background = element_blank(), panel.grid.major =    element_line("grey"), panel.border = element_rect(color = "black", fill = NA)) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 1)) +
+    labs(y = "Proportion Emerged", x = "Seed Mass (mg)") + geom_smooth(method = "lm", se = T)
+b <- ggplot(climate_morphology_merged, aes(x = Seed_Weight, y = Height_cm)) +
+    geom_point()+theme(panel.background = element_blank(), panel.grid.major =    element_line("grey"), panel.border = element_rect(color = "black", fill = NA)) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 1)) +
+    labs(y = "Height (cm)", x = "Seed Mass (mg)") + geom_smooth(method = "lm", se = T)
+c <- ggplot(climate_morphology_merged, aes(x = Seed_Weight, y = Time_to_TrueLeaves)) +
+    geom_point()+theme(panel.background = element_blank(), panel.grid.major =    element_line("grey"), panel.border = element_rect(color = "black", fill = NA)) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 1)) +
+    labs(y = "Time to True Leaves (days)", x = "Seed Mass (mg)") + geom_smooth(method = "lm", se = T)
+
+plot <- plot_grid(a,c,b, labels = c("A","B","C"), ncol = 3, nrow = 2, align = "h")
+
+modelA <- lm(Proportion_Emerged~Seed_Weight, data = climate_morphology_merged)
+summary(modelA)
+modelB <- lm(Time_to_TrueLeaves~Seed_Weight, data = climate_morphology_merged)
+summary(modelB)
+modelC <- lm(Height_cm~Seed_Weight, data = climate_morphology_merged)
+summary(modelC)
+
+```
+
